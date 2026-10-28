@@ -405,12 +405,17 @@ export interface EnableResult {
  * Turn the board on for a workspace.
  *
  * "On" means two things, and both matter:
- *   1. `.dsh/taskboard.json` exists, so the panel shows a real (possibly
- *      empty) board instead of the first-run prompt;
+ *   1. the board exists — `.dsh/taskboard.json` (single ledger) or
+ *      `.dsh/taskboard/` (one file per card) — so the panel shows a real
+ *      (possibly empty) board instead of the first-run prompt;
  *   2. `.dsh/BOARD-PROTOCOL.md` exists, so an agent that has never seen this
  *      board has the local rules in the project itself — the plugin's system
  *      prompt covers the flow, but the project doc is what a human or a
  *      different harness can read without the plugin.
+ *
+ * `options.layout` picks the layout for a workspace that has no board yet (the
+ * enable wizard asks). It is ignored for an existing board: enabling may create
+ * a board, never convert one — that is `migrateBoardLayout`.
  *
  * Idempotent and non-destructive: an existing board is NEVER rewritten (its
  * tasks are the user's data), and an existing protocol doc is left as-is so a
@@ -418,19 +423,28 @@ export interface EnableResult {
  */
 export async function enableBoard(
   cwd: string,
-  options: { seedProtocol?: boolean } = {},
+  options: { seedProtocol?: boolean; layout?: StorageMode } = {},
 ): Promise<EnableResult> {
-  const mode = await resolveStorageMode(cwd)
+  const hasFile = await fileExists(boardFilePath(cwd))
+  const hasDir = await fileExists(boardDirPath(cwd))
+  const mode: StorageMode = hasDir ? 'tasks' : hasFile ? 'file' : (options.layout ?? await resolveStorageMode(cwd))
   const boardFile = mode === 'file' ? boardFilePath(cwd) : boardDirPath(cwd)
   const protocolFile = join(cwd, '.dsh', 'BOARD-PROTOCOL.md')
-  const alreadyExisted = await fileExists(boardFile)
+  const alreadyExisted = hasFile || hasDir
 
   // Creating a board is a write, so it goes through the lock like any other.
+  // The artifact is written directly (not through saveBoard) because saveBoard
+  // re-resolves the layout, and for a brand-new workspace it would only see the
+  // preference — not the layout this call was asked to create.
   if (!alreadyExisted) {
     await withBoardLock(cwd, async () => {
-      // Re-check under the lock: another writer may have won the race.
       if (await fileExists(boardFile)) return
-      await saveBoard(cwd, emptyBoard(resolve(cwd)))
+      const empty = emptyBoard(resolve(cwd))
+      if (mode === 'file') {
+        await atomicWrite(boardFilePath(cwd), `${JSON.stringify(empty, null, 2)}\n`)
+      } else {
+        await saveTaskDir(cwd, empty, { cards: new Map(), files: new Map(), meta: null, seen: 0 })
+      }
     })
   }
 

@@ -99,13 +99,22 @@ async function exists(path: string): Promise<boolean> {
   }
 }
 
-/** Which layout this workspace uses right now. */
+/**
+ * Which layout this workspace uses right now.
+ *
+ * What is on disk wins: a workspace that already has a board is NEVER
+ * re-interpreted as the other layout. Otherwise flipping the preference (or
+ * pinning it in a profile) would make an existing single-file board read as an
+ * empty per-card board — data still on disk, but invisible. The preference only
+ * decides what a brand-new workspace gets, and `auto` keeps the historical
+ * default (single file).
+ */
 export async function resolveStorageMode(cwd: string): Promise<StorageMode> {
-  // Explicit config wins; then the env switch (the CLI/agent side); then `auto`.
-  if (preference !== 'auto') return preference
+  if (await exists(boardDirPath(cwd))) return 'tasks'
+  if (await exists(boardFilePath(cwd))) return 'file'
   const env = process.env.TASKBOARD_STORAGE
-  if (env === 'file' || env === 'tasks') return env
-  return (await exists(boardDirPath(cwd))) ? 'tasks' : 'file'
+  const wanted = preference !== 'auto' ? preference : env === 'tasks' || env === 'file' ? env : 'auto'
+  return wanted === 'tasks' ? 'tasks' : 'file'
 }
 
 /** What a load remembered, so a save can write only the files that changed. */

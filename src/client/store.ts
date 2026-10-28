@@ -65,6 +65,11 @@ export interface TaskboardState {
    * first-run shapes apart: absent (needs enabling) vs empty (needs a task).
    */
   boardExists: boolean
+  /**
+   * Which storage layout this workspace uses (v0.9.5). The enable wizard takes
+   * its default from it; null when the host did not report one (older host).
+   */
+  boardStorage: 'file' | 'tasks' | null
 }
 
 /** Create/claim/update/comment requests without the cwd (the store fills it in). */
@@ -89,12 +94,13 @@ export interface TaskboardStore {
   setMiniOpen(open: boolean): void
   clearError(): void
   /**
-   * Turn the board on for the current workspace: create the board file and
-   * seed `.dsh/BOARD-PROTOCOL.md`. Resolves the host's report (file paths,
-   * whether things already existed) so the wizard can show what happened; null
-   * when there is no cwd or the write failed (error lands on the store).
+   * Turn the board on for the current workspace: create the board (the chosen
+   * layout, or the workspace default) and seed `.dsh/BOARD-PROTOCOL.md`.
+   * Resolves the host's report (file paths, whether things already existed) so
+   * the wizard can show what happened; null when there is no cwd or the write
+   * failed (error lands on the store).
    */
-  enableBoard(): Promise<EnableOutcome | null>
+  enableBoard(layout?: 'file' | 'tasks'): Promise<EnableOutcome | null>
   /** Create a task; resolves true on success so the form can close itself. */
   create(input: CreateInput): Promise<boolean>
   /** Claim a pool task (human self-assign); conflict surfaces as `error`. */
@@ -143,6 +149,7 @@ const INITIAL: TaskboardState = {
   cli: null,
   boardFile: null,
   boardExists: false,
+  boardStorage: null,
 }
 
 /** Build a store. Tests pass a fake bridge; the app uses the default one. */
@@ -228,6 +235,7 @@ export function createTaskboardStore(options: StoreOptions = {}): TaskboardStore
             cli: res.cli ?? null,
             boardFile: res.board_file ?? null,
             boardExists: res.board_exists ?? true,
+            boardStorage: res.storage ?? null,
           })
         } else {
           reportPollError(res.error)
@@ -342,12 +350,12 @@ export function createTaskboardStore(options: StoreOptions = {}): TaskboardStore
     clearError() {
       set({ error: null })
     },
-    async enableBoard() {
+    async enableBoard(layout) {
       const cwd = state.cwd
       if (!cwd || state.busy) return null
       set({ busy: true, error: null })
       try {
-        const res = await bridge.enable({ cwd })
+        const res = await bridge.enable({ cwd, ...(layout ? { layout } : {}) })
         if (!res.ok) {
           set({ error: res.error ?? 'unknown error' })
           return null

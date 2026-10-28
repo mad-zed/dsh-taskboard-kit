@@ -1771,7 +1771,29 @@ await check('panel: an unopened board offers to turn the board on, not "create a
   assert.ok(html.includes('not on for this workspace'), 'the wizard explains the board is off')
   assert.ok(html.includes('Turn the board on'), 'and offers the enable action')
   assert.ok(html.includes('taskboard.json') && html.includes('BOARD-PROTOCOL.md'), 'names both files it will create')
+  assert.ok(html.includes('One file per card') && html.includes('One file'), 'offers BOTH storage layouts')
+  assert.ok(html.includes('.dsh/taskboard/'), 'names the per-card directory')
   assert.ok(!html.includes('has no cards yet'), 'the empty-board prompt is NOT shown')
+})
+
+await check('panel: the wizard takes its default layout from the host (profile pinned to tasks)', async () => {
+  const board = collabBoard([])
+  const store = client.createTaskboardStore({
+    bridge: {
+      board: async () => ({ ok: true, board, board_exists: false, storage: 'tasks' }),
+    },
+    pollMs: 10 ** 9,
+  })
+  store.setCwd('/w')
+  await store.refresh()
+  assert.equal(store.getState().boardStorage, 'tasks', 'the store keeps the reported layout')
+
+  const html = renderToStaticMarkup(React.createElement(client.BoardPanel, { store }))
+  // With the per-card default the "will create" row names the directory (and
+  // must NOT claim it will create the single ledger as the chosen layout).
+  assert.ok(html.includes('.dsh/taskboard/'), 'the per-card directory is the default choice')
+  assert.ok(html.includes('aria-checked=\"true\"'), 'a layout is marked as chosen')
+  assert.ok(html.includes('taskboard migrate'), 'says an existing board keeps its layout')
 })
 
 await check('panel: an ON but empty board asks for a task instead', async () => {
@@ -1795,7 +1817,7 @@ await check('store.enableBoard: posts /enable, then re-reads the board', async (
     bridge: {
       board: async () => ({ ok: true, board: empty, board_exists: calls.length > 0 }),
       enable: async (req) => {
-        calls.push(req.cwd)
+        calls.push(req)
         return { ok: true, board_file: '/w/.dsh/taskboard.json', protocol_file: '/w/.dsh/BOARD-PROTOCOL.md', already_existed: false }
       },
     },
@@ -1806,9 +1828,14 @@ await check('store.enableBoard: posts /enable, then re-reads the board', async (
   assert.equal(store.getState().boardExists, false, 'starts unopened')
 
   const outcome = await store.enableBoard()
-  assert.deepEqual(calls, ['/w'], 'enable was called for the current cwd')
+  assert.deepEqual(calls.map((req) => req.cwd), ['/w'], 'enable was called for the current cwd')
+  assert.equal(calls[0].layout, undefined, 'no layout asked → the host default is used')
   assert.equal(outcome.protocolFile, '/w/.dsh/BOARD-PROTOCOL.md')
   assert.equal(store.getState().boardExists, true, 'the re-read picked up the new board')
+
+  // The wizard's layout choice is forwarded verbatim.
+  await store.enableBoard('tasks')
+  assert.equal(calls[1].layout, 'tasks', 'the chosen layout reaches the host')
 
   // No cwd → nothing to enable, no request fired.
   const idle = client.createTaskboardStore({ bridge: { board: async () => ({ ok: true, board: empty }) }, pollMs: 10 ** 9 })

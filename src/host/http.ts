@@ -459,14 +459,21 @@ export function createTaskboardBridge(deps: TaskboardBridgeDeps): TaskboardBridg
     }
 
     // Turn the board on for a workspace. The empty-state wizard calls this:
-    // it creates the board file (so the panel stops showing "no board yet") and
+    // it creates the board (single ledger, or one file per card — `layout`) and
     // seeds the workspace protocol doc. Idempotent and never destructive.
     if (method === 'POST' && path === `${BRIDGE_PREFIX}/enable`) {
       requireMutateHeader(req)
       const body = await readJsonBody(req)
       const cwd = requireCwd(deps, body.cwd, true)
+      const layout = body.layout
+      if (layout !== undefined && layout !== 'file' && layout !== 'tasks') {
+        return fail(res, 400, 'invalid-input', '"layout" must be "file" or "tasks"')
+      }
       return runPlain(res, async () => {
-        const result = await deps.enableBoard(cwd, { seedProtocol: body.seed_protocol !== false })
+        const result = await deps.enableBoard(cwd, {
+          seedProtocol: body.seed_protocol !== false,
+          ...(layout ? { layout } : {}),
+        })
         return { ok: true as const, ...result }
       })
     }

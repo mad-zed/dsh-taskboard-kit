@@ -11,6 +11,7 @@
  */
 
 import assert from 'node:assert/strict'
+import { existsSync } from 'node:fs'
 import { cp, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -24,6 +25,7 @@ const {
   boardFilePath,
   claimTask,
   createTask,
+  enableBoard,
   getTask,
   listTasks,
   loadBoard,
@@ -235,6 +237,57 @@ await check('saveBoard on the per-card layout writes meta only when tails change
   await saveBoard(ws, board)
   const after = (await stat(metaPath)).mtimeMs
   assert.equal(after, before, 'meta.json must not be rewritten by an unchanged save')
+})
+
+await check('enableBoard creates the layout it was asked for, and never converts an existing board', async () => {
+  const tasksWs = await workspace()
+  const enabled = await enableBoard(tasksWs, { layout: 'tasks', seedProtocol: false })
+  assert.equal(enabled.board_file, boardDirPath(tasksWs), 'the wizard-chosen layout is what gets created')
+  assert.equal(enabled.already_existed, false)
+  assert.equal(await resolveStorageMode(tasksWs), 'tasks')
+  assert.equal(await readdir(boardDirPath(tasksWs)).then((names) => names.includes('meta.json')), true)
+
+  // Asking for the other layout later must NOT convert it (that is `migrate`).
+  const again = await enableBoard(tasksWs, { layout: 'file', seedProtocol: false })
+  assert.equal(again.already_existed, true)
+  assert.equal(again.board_file, boardDirPath(tasksWs), 'the existing per-card board kept its layout')
+  assert.equal(existsSync(boardFilePath(tasksWs)), false, 'no single ledger was created next to it')
+
+  const fileWs = await workspace()
+  const fileEnabled = await enableBoard(fileWs, { layout: 'file', seedProtocol: false })
+  assert.equal(fileEnabled.board_file, boardFilePath(fileWs))
+  const fileAgain = await enableBoard(fileWs, { layout: 'tasks', seedProtocol: false })
+  assert.equal(fileAgain.board_file, boardFilePath(fileWs), 'an existing single ledger is not converted either')
+  assert.equal(await resolveStorageMode(fileWs), 'file')
+})
+
+await check('layout precedence: an existing board is never re-read as the other layout, even with the preference pinned', async () => {
+  const ws = await workspace()
+  await migrateBoardLayout(ws, 'file')
+  const task = await createTask(ws, { title: 'legacy card' }, 'dsh')
+
+  process.env.TASKBOARD_STORAGE = 'tasks'
+  try {
+    assert.equal(await resolveStorageMode(ws), 'file', 'the artifact on disk wins over the preference')
+    const board = await loadBoard(ws)
+    assert.equal(board.tasks[task.id]?.title, 'legacy card', 'the card is still visible, not an "empty" per-card board')
+  } finally {
+    delete process.env.TASKBOARD_STORAGE
+  }
+})
+
+await check('a brand-new workspace follows the pinned preference (tasks)', async () => {
+  const ws = await workspace()
+  process.env.TASKBOARD_STORAGE = 'tasks'
+  try {
+    assert.equal(await resolveStorageMode(ws), 'tasks')
+    const enabled = await enableBoard(ws, { seedProtocol: false })
+    assert.equal(enabled.board_file, boardDirPath(ws), 'no layout argument → the preference decides')
+    const task = await createTask(ws, { title: 'new in tasks' }, 'dsh')
+    assert.match(task.id, /^T-[0-9A-Z]{4}$/)
+  } finally {
+    delete process.env.TASKBOARD_STORAGE
+  }
 })
 
 for (const dir of dirs) await rm(dir, { recursive: true, force: true })

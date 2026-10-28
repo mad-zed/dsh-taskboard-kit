@@ -110,6 +110,13 @@ export type BoardResponse = {
   board_file?: string
   board_exists?: boolean
   /**
+   * Which storage layout this workspace uses (v0.9.5): `file` = one JSON ledger,
+   * `tasks` = one file per card. The enable wizard takes its default from this,
+   * so a profile pinned to `tasks` creates a per-card board without making the
+   * user guess. Absent on older hosts.
+   */
+  storage?: 'file' | 'tasks'
+  /**
    * mtime (ms) of the board file the snapshot was read from; 0 when no file
    * exists. Lets the panel discard a snapshot that is strictly OLDER than the
    * one already applied — request issue order says nothing about content
@@ -120,13 +127,20 @@ export type BoardResponse = {
 export type TaskResponse = { ok: true; task: Task } | ApiError
 
 /**
- * Turn the board on for a workspace: create `.dsh/taskboard.json` if absent,
- * and seed `.dsh/BOARD-PROTOCOL.md` if absent. Never rewrites either.
+ * Turn the board on for a workspace: create the board (single JSON ledger, or
+ * one file per card) if absent, and seed `.dsh/BOARD-PROTOCOL.md` if absent.
+ * Never rewrites either.
  */
 export interface EnableRequest {
   cwd: string
   /** When false, only the board is created (no protocol doc). Default true. */
   seed_protocol?: boolean
+  /**
+   * Which layout to create when there is no board yet (v0.9.5). Ignored when a
+   * board already exists — an existing board is never converted by enabling.
+   * Omitted = the workspace default (profile `storage`, else single file).
+   */
+  layout?: 'file' | 'tasks'
 }
 
 export type EnableResponse =

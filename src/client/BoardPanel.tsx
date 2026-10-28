@@ -1433,8 +1433,9 @@ export function BoardPanel(props: BoardPanelProps): JSX.Element {
             boardFile={state.boardFile}
             cli={state.cli}
             busy={state.busy}
+            defaultLayout={state.boardStorage ?? 'file'}
             onCreate={() => setCreateOpen(true)}
-            onEnable={() => store.enableBoard()}
+            onEnable={(layout) => store.enableBoard(layout)}
           />
         )
       ) : state.groupBy === 'stats' ? (
@@ -1973,6 +1974,7 @@ function EnableBoardWizard({
   boardFile,
   cli,
   busy,
+  defaultLayout,
   onCreate,
   onEnable,
 }: {
@@ -1980,15 +1982,27 @@ function EnableBoardWizard({
   boardFile: string | null
   cli: string | null
   busy: boolean
+  /** The layout this workspace would get by default (profile `storage`). */
+  defaultLayout: 'file' | 'tasks'
   onCreate(): void
-  onEnable(): Promise<{ boardFile: string; protocolFile: string | null; alreadyExisted: boolean } | null>
+  onEnable(layout: 'file' | 'tasks'): Promise<{ boardFile: string; protocolFile: string | null; alreadyExisted: boolean } | null>
 }): JSX.Element {
+  const [layout, setLayout] = useState<'file' | 'tasks'>(defaultLayout)
   const [result, setResult] = useState<{ boardFile: string; protocolFile: string | null; alreadyExisted: boolean } | null>(null)
   const projectDir = guideProjectDir(boardFile, cwd)
 
+  /** `.dsh/taskboard/` or `.dsh/taskboard.json` — what the enable will create. */
+  const boardPathLabel = (value: 'file' | 'tasks'): string =>
+    value === 'tasks' ? '.dsh/taskboard/' : '.dsh/taskboard.json'
+  const relativeOf = (abs: string): string => {
+    const norm = abs.replace(/\\/g, '/')
+    const at = norm.indexOf('/.dsh/')
+    return at >= 0 ? norm.slice(at + 1) : norm
+  }
+
   const enable = async (): Promise<void> => {
     if (busy) return
-    const outcome = await onEnable()
+    const outcome = await onEnable(layout)
     if (outcome) setResult(outcome)
   }
 
@@ -2005,7 +2019,7 @@ function EnableBoardWizard({
           <ul style={styles.wizardFiles}>
             <li style={styles.wizardFile}>
               <span style={styles.wizardFileLabel}>{L('看板数据', 'Board data')}</span>
-              <code style={styles.wizardCode} title={result.boardFile}>.dsh/taskboard.json</code>
+              <code style={styles.wizardCode} title={result.boardFile}>{relativeOf(result.boardFile)}</code>
             </li>
             <li style={styles.wizardFile}>
               <span style={styles.wizardFileLabel}>{L('工作区规范', 'Rules')}</span>
@@ -2043,10 +2057,33 @@ function EnableBoardWizard({
             'Once on, agents collaborate by the protocol: each session starts with its own slice, claims before working, hands off for review, and settles after approval.',
           )}
         </p>
+        <div style={styles.wizardFiles} role="radiogroup" aria-label={L('存储布局', 'Storage layout')}>
+          {(['tasks', 'file'] as const).map((value) => (
+            <button
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={layout === value}
+              className={layout === value ? 'tb-chip active' : 'tb-chip'}
+              style={styles.wizardLayoutOption}
+              onClick={() => setLayout(value)}
+            >
+              <span style={styles.wizardLayoutHead}>
+                <span>{value === 'tasks' ? L('每卡一文件', 'One file per card') : L('单文件', 'One file')}</span>
+                <code style={styles.wizardCode}>{boardPathLabel(value)}</code>
+              </span>
+              <span style={styles.wizardMuted}>
+                {value === 'tasks'
+                  ? L('一张卡一个文件；两台机器各自建卡，git 合并不会因为同一张表而冲突', 'One file per card — two machines adding cards never collide on one table when merged')
+                  : L('所有卡放在同一个 JSON 里；单机或旧工具最省事', 'Every card in one JSON — simplest for one machine or older tooling')}
+              </span>
+            </button>
+          ))}
+        </div>
         <ul style={styles.wizardFiles}>
           <li style={styles.wizardFile}>
             <span style={styles.wizardFileLabel}>{L('会创建', 'Will create')}</span>
-            <code style={styles.wizardCode} title={`${projectDir}/.dsh/taskboard.json`}>.dsh/taskboard.json</code>
+            <code style={styles.wizardCode} title={`${projectDir}/${boardPathLabel(layout)}`}>{boardPathLabel(layout)}</code>
             <span style={styles.wizardMuted}>{L('看板数据', 'board data')}</span>
           </li>
           <li style={styles.wizardFile}>
@@ -2056,7 +2093,10 @@ function EnableBoardWizard({
           </li>
         </ul>
         <p style={styles.wizardMuted}>
-          {L('两者都已存在时不会覆盖任何东西。', 'Neither is overwritten if it already exists.')}
+          {L(
+            '两者都已存在时不会覆盖任何东西；已有看板的布局也不会被这里的选择改掉（要转换用 taskboard migrate）。',
+            'Neither is overwritten if it already exists, and an existing board keeps its layout (use taskboard migrate to convert).',
+          )}
         </p>
         <div style={styles.wizardActions}>
           <button type="button" className="tb-btn tb-btn-primary" disabled={busy} onClick={() => void enable()}>
@@ -4024,6 +4064,17 @@ const styles: Record<string, CSSProperties> = {
   wizardTitle: { margin: 0, fontSize: 13.5, fontWeight: 600 },
   wizardText: { margin: 0, fontSize: 12, lineHeight: 1.65, color: FG },
   wizardFiles: { listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 5 },
+  wizardLayoutOption: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: 3,
+    textAlign: 'left',
+    height: 'auto',
+    lineHeight: 1.55,
+    padding: '7px 10px',
+  },
+  wizardLayoutHead: { display: 'flex', alignItems: 'baseline', gap: 8, width: '100%', justifyContent: 'space-between' },
   wizardFile: { display: 'flex', alignItems: 'baseline', gap: 10, fontSize: 11.5, flexWrap: 'wrap' },
   wizardFileLabel: { color: DIM, flexShrink: 0, minWidth: 62 },
   wizardCode: {
