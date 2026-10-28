@@ -24,7 +24,7 @@ delete process.env.TASKBOARD_ACTOR
 delete process.env.TASKBOARD_ACTOR_ALIASES
 delete process.env.TASKBOARD_WATCH_NAMES
 
-const { createTask, inbox, migrateBoardLayout } = await import('../lib/index.js')
+const { createTask, inbox, migrateBoardLayout, selfActor } = await import('../lib/index.js')
 
 let failed = 0
 async function check(name, fn) {
@@ -90,6 +90,28 @@ await check('a different actor still does not see the card (no over-folding)', a
 
   const theirs = await inbox(ws, 'kimi', { poolLimit: 0 })
   assert.deepEqual(kinds(theirs), [])
+})
+
+// The session-start notice and the tools must answer "who am I" identically —
+// they used to disagree whenever TASKBOARD_WATCH_NAMES was configured, so the
+// notice counted `dsh`'s cards and the tools filed under `dsh-agent`.
+await check('selfActor: one resolver for notice and tools', async () => {
+  const env = { ...process.env }
+  try {
+    delete process.env.TASKBOARD_ACTOR
+    delete process.env.TASKBOARD_WATCH_NAMES
+    assert.equal(selfActor(), 'dsh-agent', 'no env at all → the default')
+
+    process.env.TASKBOARD_WATCH_NAMES = 'dsh,dsh-agent'
+    assert.equal(selfActor(), 'dsh', 'the first watch name is the canonical one')
+
+    process.env.TASKBOARD_ACTOR = 'kimi'
+    assert.equal(selfActor(), 'kimi', 'TASKBOARD_ACTOR outranks the watch names')
+    assert.equal(selfActor('  dsh-audit '), 'dsh-audit', 'an explicit by wins, trimmed')
+    assert.equal(selfActor('   '), 'kimi', 'a blank by falls back instead of becoming an empty owner')
+  } finally {
+    process.env = env
+  }
 })
 
 for (const dir of dirs) await rm(dir, { recursive: true, force: true })

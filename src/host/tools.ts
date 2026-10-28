@@ -7,8 +7,10 @@
  * kanban drives through the `/dsh-taskboard/*` bridge.
  *
  * Tool metadata (descriptions/parameters) is English — the model consumes it;
- * output text is bilingual via `L()`. The acting identity is the `by`
- * argument, else `TASKBOARD_ACTOR`, else `dsh-agent`.
+ * output text is bilingual via `L()`. The acting identity is the `by` argument,
+ * else the shared resolver in `actor.ts` (`TASKBOARD_ACTOR` → the first
+ * `TASKBOARD_WATCH_NAMES` name → `dsh-agent`) — the same one the session-start
+ * notice uses, so the notice and the tools never disagree about who "I" am.
  *
  * v0.5.4 adds `taskboard_inbox` — the "what do I do right now" call that makes
  * the board push work at the agent instead of waiting to be polled — the
@@ -22,6 +24,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import { actorSeenAt, boardHealth, stalenessOf, type InboxItem } from '../shared/board.ts'
 import { columnOf, type Board, type Task } from '../shared/types.ts'
+import { selfActor } from './actor.ts'
 import { L } from './locale.ts'
 import { notifyHuman } from './notify.ts'
 import { notifyReviewer } from './review-notify.ts'
@@ -42,12 +45,6 @@ import { resolveCwd } from './workspace.ts'
 const TEXT_OUTPUT = {
   schema: { type: 'string' as const },
   render: (_args: unknown, value: string) => [{ type: 'text' as const, text: value }],
-}
-
-/** Who acts: the explicit `by` argument wins, then the env, then the default. */
-function actorOf(by: string | undefined): string {
-  if (typeof by === 'string' && by.trim() !== '') return by.trim()
-  return process.env.TASKBOARD_ACTOR?.trim() || 'dsh-agent'
 }
 
 function whoLabel(assignee: string | null): string {
@@ -303,7 +300,7 @@ export function registerTaskboardTools(ctx: Context): void {
       'best pool tasks to claim. Every item comes with the command that moves it. ' +
       'Cards waiting on the human are listed too: pinging the human is your job, not the board\'s.',
     parameters: {
-      by: { type: 'string', description: 'Acting identity (default: TASKBOARD_ACTOR or dsh-agent). Aliases like dsh/dsh-agent resolve to one owner.' },
+      by: { type: 'string', description: 'Acting identity (default: TASKBOARD_ACTOR, else the first TASKBOARD_WATCH_NAMES name, else dsh-agent). Aliases like dsh/dsh-agent resolve to one owner.' },
       limit: { type: 'number', description: 'Max items to return (default 12; 0 = no cap).' },
       pool_limit: { type: 'number', description: 'How many claimable pool tasks to suggest (default 3; 0 = none).' },
       include_human: { type: 'boolean', description: 'Include cards waiting on the human (default true) — so you can go ping them.' },
@@ -312,7 +309,7 @@ export function registerTaskboardTools(ctx: Context): void {
     async execute(args, exec) {
       try {
         const cwd = resolveCwd(ctx, exec)
-        const actor = actorOf(args.by)
+        const actor = selfActor(args.by)
         const items = await inbox(cwd, actor, {
           ...(args.pool_limit !== undefined ? { poolLimit: args.pool_limit } : {}),
           ...(args.include_human !== undefined ? { includeHumanBlocked: args.include_human } : {}),
@@ -343,7 +340,7 @@ export function registerTaskboardTools(ctx: Context): void {
       priority: { type: 'string', enum: ['high', 'medium', 'low'], description: 'Default: medium.' },
       value: { type: 'number', enum: [0.5, 1, 2, 3, 5, 8], description: 'Value points — one of 0.5 1 2 3 5 8; omit if unestimated.' },
       tags: { type: 'array', items: { type: 'string' }, description: 'Free-form grouping labels.' },
-      by: { type: 'string', description: 'Acting identity recorded in the task log (default: TASKBOARD_ACTOR or dsh-agent).' },
+      by: { type: 'string', description: 'Acting identity recorded in the task log (default: TASKBOARD_ACTOR, else the first TASKBOARD_WATCH_NAMES name, else dsh-agent).' },
     },
     output: TEXT_OUTPUT,
     async execute(args, exec) {
@@ -356,7 +353,7 @@ export function registerTaskboardTools(ctx: Context): void {
           ...(args.priority !== undefined ? { priority: args.priority } : {}),
           ...(args.value !== undefined ? { value: args.value } : {}),
           ...(args.tags !== undefined ? { tags: args.tags } : {}),
-        }, actorOf(args.by))
+        }, selfActor(args.by))
         const placement = task.assignee
           ? L('已指派给 {who}', 'assigned to {who}', { who: task.assignee })
           : L('在待认领池里，可用 taskboard_claim 认领', 'in the claimable pool — claim it with taskboard_claim')
@@ -380,12 +377,12 @@ export function registerTaskboardTools(ctx: Context): void {
       'claim conflicts, someone else got there first; pick another task instead of working in parallel by accident.',
     parameters: {
       id: { type: 'string', required: true, description: 'Task id, e.g. T-1 (from taskboard_list).' },
-      by: { type: 'string', description: 'Acting identity recorded in the task log (default: TASKBOARD_ACTOR or dsh-agent).' },
+      by: { type: 'string', description: 'Acting identity recorded in the task log (default: TASKBOARD_ACTOR, else the first TASKBOARD_WATCH_NAMES name, else dsh-agent).' },
     },
     output: TEXT_OUTPUT,
     async execute(args, exec) {
       const cwd = resolveCwd(ctx, exec)
-      const actor = actorOf(args.by)
+      const actor = selfActor(args.by)
       try {
         const task = await claimTask(cwd, args.id, actor)
         return L(
@@ -455,13 +452,13 @@ export function registerTaskboardTools(ctx: Context): void {
       value: { oneOf: [{ type: 'number', enum: [0.5, 1, 2, 3, 5, 8] }, { type: 'null' }], description: 'Value points — one of 0.5 1 2 3 5 8; null clears back to unestimated.' },
       tags: { type: 'array', items: { type: 'string' }, description: 'Replace the tag list.' },
       note: { type: 'string', description: 'Progress note appended to the log entry this update produces.' },
-      by: { type: 'string', description: 'Acting identity recorded in the task log (default: TASKBOARD_ACTOR or dsh-agent).' },
+      by: { type: 'string', description: 'Acting identity recorded in the task log (default: TASKBOARD_ACTOR, else the first TASKBOARD_WATCH_NAMES name, else dsh-agent).' },
     },
     output: TEXT_OUTPUT,
     async execute(args, exec) {
       try {
         const cwd = resolveCwd(ctx, exec)
-        const actor = actorOf(args.by)
+        const actor = selfActor(args.by)
         const { task, events } = await updateTask(cwd, args.id, {
           ...(args.action !== undefined ? { action: args.action } : {}),
           ...(args.assignee !== undefined ? { assignee: args.assignee } : {}),
@@ -547,13 +544,13 @@ export function registerTaskboardTools(ctx: Context): void {
     parameters: {
       id: { type: 'string', required: true, description: 'Task id, e.g. T-1.' },
       text: { type: 'string', required: true, description: 'The comment body (findings, handoff notes, test feedback).' },
-      by: { type: 'string', description: 'Acting identity recorded on the comment (default: TASKBOARD_ACTOR or dsh-agent).' },
+      by: { type: 'string', description: 'Acting identity recorded on the comment (default: TASKBOARD_ACTOR, else the first TASKBOARD_WATCH_NAMES name, else dsh-agent).' },
     },
     output: TEXT_OUTPUT,
     async execute(args, exec) {
       try {
         const cwd = resolveCwd(ctx, exec)
-        const task = await addComment(cwd, args.id, args.text, actorOf(args.by))
+        const task = await addComment(cwd, args.id, args.text, selfActor(args.by))
         return L(
           '已在 {id} 留言（共 {count} 条）：{title}',
           'Commented on {id} ({count} comment(s) so far): {title}',

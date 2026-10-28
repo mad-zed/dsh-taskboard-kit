@@ -24,6 +24,7 @@
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
 import { BRIDGE_PREFIX, createTaskboardBridge, defaultBridgeDeps } from './http.ts'
+import { selfActor } from './actor.ts'
 import { L } from './locale.ts'
 import { notifyHuman } from './notify.ts'
 import { inbox, loadBoard } from './store.ts'
@@ -84,6 +85,7 @@ export {
 } from './store.ts'
 export { displayBoardPath, resolveStorageMode, setStoragePreference, type StorageMode, type StoragePreference } from './storage.ts'
 export { resolveCwd } from './workspace.ts'
+export { selfActor } from './actor.ts'
 export { L } from './locale.ts'
 export { noticePayload, notifyHuman, notifyHookExample, msg9HookExample, type HumanNotice, type NotifyResult } from './notify.ts'
 export {
@@ -183,13 +185,6 @@ function pluginNotice(uuid: string, text: string, summary: string): PluginNotice
     content: [{ type: 'text', text }],
     source: { kind: 'plugin:taskboard-kit', form: 'notice', summary: summary.slice(0, 120) },
   }
-}
-
-/** Who this instance is on the board (same resolution as the tools). */
-function selfActor(): string {
-  return process.env.TASKBOARD_ACTOR?.trim()
-    || process.env.TASKBOARD_WATCH_NAMES?.split(',')[0]?.trim()
-    || 'dsh-agent'
 }
 
 /**
