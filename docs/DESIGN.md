@@ -2,7 +2,7 @@
 
 ## 定位
 
-每个 dsh workspace 一块本地任务看板。单一真实来源 = `<workspace>/.dsh/taskboard.json`，无服务端、无账号体系。板文件放 workspace 内（而不是 `~/.dsh/`）是有意为之：同一目录干活的多个 harness（dsh / kimi-code / claude-code）和人类都能读写同一块板。
+每个 dsh workspace 一块本地任务看板。单一真实来源 = `<workspace>/.dsh/taskboard.json`，无服务端、无账号体系。板文件放 workspace 内（而不是 `~/.dsh/`）是有意为之：同一目录干活的多个 harness（dsh / kimi-code / claude-code）和人类都能读写同一块板。v0.9.5 起同一块板也可以每卡一文件存于 `.dsh/taskboard/`（见 `docs/adr/0001-per-task-files.md`）。
 
 ## 分层
 

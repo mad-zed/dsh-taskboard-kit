@@ -11,8 +11,8 @@
  *             "nobody touched it for three days");
  *   • web   — the kanban tab itself (see `src/client`).
  *
- * Model: **one board per dsh workspace**, its only source of truth the JSON
- * file `<workspace>/.dsh/taskboard.json`. Tools resolve the workspace from the
+ * Model: **one board per dsh workspace**, its only source of truth under
+ * `<workspace>/.dsh/` (a JSON ledger, or one file per card since v0.9.5). Tools resolve the workspace from the
  * calling session's cwd; the panel passes the same cwd as a query/body field.
  *
  * The collaboration protocol this file writes into the system prompt is the
@@ -201,8 +201,8 @@ function protocolText(): string {
   return L(
     [
       '## 任务看板（多 Agent 协作，必读）',
-      '本 workspace 有一块共享任务看板；人类在「看板」页签看的是同一块板，唯一真实来源是 `.dsh/taskboard.json`。',
-      '一切操作走 taskboard_* 工具（没有插件的 Agent 走 `bin/taskboard.mjs` CLI），**永远不要手改 JSON**。',
+      '本 workspace 有一块共享任务看板；人类在「看板」页签看的是同一块板。数据在 `.dsh/` 下：单文件布局是 `.dsh/taskboard.json`，每卡一文件布局是 `.dsh/taskboard/`（`taskboard path` 可确认，通常不用关心）。',
+      '一切操作走 taskboard_* 工具（没有插件的 Agent 走 `bin/taskboard.mjs` CLI），**永远不要手改这些文件**。',
       '（完整规范：本插件 `docs/COLLABORATION.md`；下面是必须遵守的那部分。）',
       '',
       '### 会话开始先看自己那一份',
@@ -261,9 +261,9 @@ function protocolText(): string {
     ].join('\n'),
     [
       '## Task board (multi-agent collaboration, required reading)',
-      'This workspace has a shared task board; the human watches the SAME board in the kanban tab. Its only source of',
-      'truth is `.dsh/taskboard.json`. Drive it with the taskboard_* tools (agents without the plugin use the',
-      '`bin/taskboard.mjs` CLI) — **never edit the JSON by hand**.',
+      'This workspace has a shared task board; the human watches the SAME board in the kanban tab. Its data lives under',
+      '`.dsh/` — `.dsh/taskboard.json` (single ledger) or `.dsh/taskboard/` (one file per card); `taskboard path` tells you which.',
+      'Drive it with the taskboard_* tools (agents without the plugin use the `bin/taskboard.mjs` CLI) — **never edit those files by hand**.',
       '(Full spec: the plugin\'s `docs/COLLABORATION.md`; the rules below are the part you must follow.)',
       '',
       '### Start every session with your own slice',

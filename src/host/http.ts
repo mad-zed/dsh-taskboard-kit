@@ -333,7 +333,7 @@ function requireMutateHeader(req: IncomingMessage): void {
  * an absolute path, no `..` segments, and — when the host can tell — a
  * workspace it actually serves (`deps.isAllowedCwd`). Without the last check a
  * caller could address (and, on a mutation, *create*) any
- * `<dir>/.dsh/taskboard.json` on the machine.
+ * `<dir>/.dsh/` (a JSON ledger or a card directory) on the machine.
  *
  * The whitelist is **live sessions only** (`agents.list()` / `sessions.list()`
  * are live-only), while the panel legitimately shows a workspace whose session

@@ -1,8 +1,8 @@
 /**
  * Shared data model of dsh-taskboard-kit — the contract both faces build on.
  *
- * One board per dsh workspace; the board's only source of truth is a JSON
- * file inside the workspace itself (`<workspace>/.dsh/taskboard.json`), so
+ * One board per dsh workspace; the board's only source of truth lives under
+ * `<workspace>/.dsh/` — one JSON ledger, or one file per card (v0.9.5) — so
  * every harness and every human working in the same directory sees the same
  * board. No server, no account system.
  *

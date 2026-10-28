@@ -168,7 +168,7 @@ await check('adds the collaboration protocol to the system prompt', () => {
   assert.match(text, /action=block/)
   assert.match(text, /unblock/)
   assert.match(text, /cannot review your own work/)
-  assert.match(text, /never edit the JSON by hand/i)
+  assert.match(text, /never edit (those|the JSON) files? by hand/i)
 })
 
 await check('listens for agent/session-start', () => {

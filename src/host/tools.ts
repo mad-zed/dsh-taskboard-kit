@@ -2,7 +2,7 @@
  * Model-facing tools of dsh-taskboard-kit.
  *
  * Every tool resolves the calling session's workspace (`exec.agent` → session
- * cwd, see workspace.ts) and operates on `<cwd>/.dsh/taskboard.json` through
+ * cwd, see workspace.ts) and operates on the board under `<cwd>/.dsh/` through
  * the lock-guarded domain operations in store.ts — the same file the browser
  * kanban drives through the `/dsh-taskboard/*` bridge.
  *

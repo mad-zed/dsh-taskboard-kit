@@ -117,8 +117,8 @@ export function aboutLinks(): AboutLink[] {
  */
 export function aboutTagline(): string {
   return L(
-    '每个 workspace 一块本地任务看板：Agent 与人类共用同一个 JSON 文件，认领、推进、审核、收口都在上面走。',
-    'One local task board per workspace: agents and humans share a single JSON file for claiming, working, reviewing and settling.',
+    '每个 workspace 一块本地任务看板：Agent 与人类共用同一份看板数据（单文件 JSON，或一张卡一个文件），认领、推进、审核、收口都在上面走。',
+    'One local task board per workspace: agents and humans share the same board data (a single JSON, or one file per card) for claiming, working, reviewing and settling.',
   )
 }
 
@@ -128,8 +128,8 @@ export function aboutTagline(): string {
  */
 export function aboutLocalNote(): string {
   return L(
-    '看板数据全部在上面这一个 JSON 里——没有服务器、没有账号、没有云同步；旁边的人能看见，只是因为看的是同一个文件。',
-    'Every bit of board data lives in that one JSON file — no server, no accounts, no cloud. Others see it only because they read the same file.',
+    '看板数据全部在上面那个位置——没有服务器、没有账号、没有云同步；旁边的人能看见，只是因为看的是同一份数据（同一个文件，或同一个卡片目录）。',
+    'Every bit of board data lives at that location — no server, no accounts, no cloud. Others see it only because they read the same data (the same file, or the same card directory).',
   )
 }
 
@@ -137,6 +137,8 @@ export function aboutLocalNote(): string {
 export interface AboutFactsInput {
   boardFile: string | null
   cwd: string | null
+  /** Which storage layout the host reports (v0.9.5): per-card or single ledger. */
+  storage?: 'file' | 'tasks' | null
   tasks: number
   /** The board's own roster size (`board.actors`), i.e. actors SEEN here — not
    *  knownActors(), which is the (smaller) set of names tasks mention. */
@@ -147,7 +149,7 @@ export interface AboutFactsInput {
 
 /** One 「标签 → 值」 row of the transparency block. */
 export interface AboutFact {
-  key: 'file' | 'tasks' | 'actors' | 'format' | 'plugin'
+  key: 'file' | 'storage' | 'tasks' | 'actors' | 'format' | 'plugin'
   label: string
   value: string
 }
@@ -161,7 +163,14 @@ export function aboutFacts(input: AboutFactsInput): AboutFact[] {
   const file = input.boardFile
     ?? (input.cwd ? `${input.cwd}/.dsh/taskboard.json` : '.dsh/taskboard.json')
   return [
-    { key: 'file', label: L('看板文件', 'Board file'), value: file },
+    { key: 'file', label: L('看板位置', 'Board location'), value: file },
+    {
+      key: 'storage',
+      label: L('存储布局', 'Storage'),
+      value: input.storage === 'tasks'
+        ? L('每卡一文件', 'one file per card')
+        : input.storage === 'file' ? L('单文件', 'single ledger') : '—',
+    },
     { key: 'tasks', label: L('卡片', 'Cards'), value: String(input.tasks) },
     { key: 'actors', label: L('花名册', 'Roster'), value: String(input.roster) },
     { key: 'format', label: L('数据格式', 'Data format'), value: input.boardVersion === null ? '—' : `v${input.boardVersion}` },

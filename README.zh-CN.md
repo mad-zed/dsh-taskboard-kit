@@ -2,7 +2,7 @@
 
 [![DSH Insights health](https://dsh-insights.com/badge/ice5kysl/dsh-taskboard-kit.svg)](https://dsh-insights.com/p/ice5kysl/dsh-taskboard-kit/)
 
-给每个 dsh workspace 一块本地任务看板：Agent 用 model tools 创建、认领、推进任务，人类在 dsh web 的「看板」页签里看同一块板、也能直接操作。看板的唯一真实来源是 workspace 里的一个 JSON 文件——**没有服务端、没有账号体系、不需要部署任何东西**。
+给每个 dsh workspace 一块本地任务看板：Agent 用 model tools 创建、认领、推进任务，人类在 dsh web 的「看板」页签里看同一块板、也能直接操作。看板数据就在 workspace 的 `.dsh/` 下——默认是一个 JSON 台账，v0.9.5 起也可以每卡一文件——**没有服务端、没有账号体系、不需要部署任何东西**。
 
 [English README](./README.md)
 
@@ -26,7 +26,7 @@
   - **按负责人**：一个负责人一条泳道（别名自动归并），一眼看清每个人头上挂了什么。
   - **统计**：宏观读数——KPI（未结清 / 待收口 / 进行中 / 卡住 / 中位周期 / 收口延迟 / 打回率）、
     每日新建 vs 结清（叠未结清累计折线）、状态与优先级分布、各负责人负载与周期、各列停留时长。
-- **「开启看板」向导**：尚未开启看板的工作区给一键开启——建 `.dsh/taskboard.json`
+- **「开启看板」向导**：尚未开启看板的工作区给一键开启——建 `.dsh/taskboard.json`（或每卡一文件的 `.dsh/taskboard/`，向导里可选）
   并写入本工作区的 `.dsh/BOARD-PROTOCOL.md`（规范）。两者都已存在时都不会被覆盖。
 - **抽屉里的 markdown（v0.7.0）**：详情与评论按 markdown 渲染——标题、列表（**按缩进嵌套，上限两级**）、GFM 表格、代码块、引用、链接、**图片**（`![alt](url)`，只放行 http/https）与**只读任务复选框**（`- [ ]` / `- [x]`）。渲染管线先转义、只注入自造标签，任何 Agent 写的卡都只是数据；渲染实拍见 `docs/images/markdown-fidelity.png`。
 - **多 Agent 协作规范**：完整规范见 [`docs/COLLABORATION.md`](./docs/COLLABORATION.md)；它的精简版在会话开始写入系统提示词，CLI `--help` 与面板「? 指南」里的片段同源。
@@ -37,7 +37,7 @@
 
 ## 板文件
 
-每个 workspace 一块：`<workspace>/.dsh/taskboard.json`（形状见英文版 README，字段自解释）。
+每个 workspace 一块：默认 `<workspace>/.dsh/taskboard.json`；v0.9.5 起可选每卡一文件（`.dsh/taskboard/T-7K2M.json` + `meta.json`）。形状见英文版 README，字段自解释。
 
 文件跟着 workspace 走，所以在同一目录干活的每个 harness、每个人都能读写同一块板——提交进 git 或 gitignore 都可以。所有变更经过锁文件（过期锁自动回收）+ tmp+rename 原子写，并发 Agent 和面板同时操作不会写花文件；`claim` 在锁内裁决：N 个并发认领恰好一个成功，其余收到冲突。
 
@@ -271,7 +271,7 @@ dsh plugin --profile web add dsh-taskboard-kit@0.7.4
 
 ## 给没有插件的 Agent 用（Kimi Code、Claude Code、任何 shell）
 
-板就是一个文件，但**绝不要手改它**——锁和原子认领都在 store 里。kit 自带一个零依赖 CLI，封装的正是同一个 store，让每个 Agent 用同一个安全入口操作：
+板的数据在 `.dsh/` 下（一个 JSON，或每卡一文件），但**绝不要手改这些文件**——锁和原子认领都在 store 里。kit 自带一个零依赖 CLI，封装的正是同一个 store，让每个 Agent 用同一个安全入口操作：
 
 ```bash
 taskboard inbox --by kimi                   # ★ 会话开始第一步：现在该你处理的事（带该敲的命令）

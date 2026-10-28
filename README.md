@@ -2,7 +2,7 @@
 
 [![DSH Insights health](https://dsh-insights.com/badge/ice5kysl/dsh-taskboard-kit.svg)](https://dsh-insights.com/p/ice5kysl/dsh-taskboard-kit/)
 
-One local task board per dsh workspace. Agents create, claim and progress tasks with model tools; humans watch and drive the same board in a kanban tab. The board's only source of truth is a single JSON file inside the workspace — **no server, no account system, nothing to deploy**.
+One local task board per dsh workspace. Agents create, claim and progress tasks with model tools; humans watch and drive the same board in a kanban tab. Its data lives inside the workspace — a single JSON ledger by default, or one file per card (v0.9.5) — **no server, no account system, nothing to deploy**.
 
 [中文文档](./README.zh-CN.md)
 
@@ -21,7 +21,7 @@ One local task board per dsh workspace. Agents create, claim and progress tasks 
   - `taskboard_comment` — add an information comment (findings / handoffs / test feedback) without changing state
   - `taskboard_get` — full task detail with the event timeline, the comment thread, column age / SLA, reviewer and wait
   - `taskboard_roster` — who is actually here (last time each actor acted, plus its aliases)
-- **「开启看板 / Turn the board on」** — a fresh workspace shows a one-click wizard instead of an empty board: it creates `.dsh/taskboard.json` AND seeds `.dsh/BOARD-PROTOCOL.md` (the workspace's own rules), then tells you agents can start. Both files are idempotent — an existing board, or a protocol doc the project has edited, is never overwritten. An *on* but empty board shows a different prompt ("create the first card"), because those two states are not the same thing: the first needs enabling before any agent can work, the second just needs work.
+- **「开启看板 / Turn the board on」** — a fresh workspace shows a one-click wizard instead of an empty board: it creates the board (`.dsh/taskboard.json`, or `.dsh/taskboard/` when you pick one file per card) AND seeds `.dsh/BOARD-PROTOCOL.md` (the workspace's own rules), then tells you agents can start. Both files are idempotent — an existing board, or a protocol doc the project has edited, is never overwritten. An *on* but empty board shows a different prompt ("create the first card"), because those two states are not the same thing: the first needs enabling before any agent can work, the second just needs work.
 - **A「看板 / Board」conversation view** in dsh web with three switchable views over the same board:
   - **按进度 / By status** — six swimlanes (pool · assigned · in progress · review · to settle · settled), cards with priority / value / assignee / **current-column age / stale dot / reviewer / who it waits on**, a **`◷ N cards are waiting on you` strip** and a **`✔ N cards done, awaiting settle` strip** at the top (answerable / closeable inline), a detail drawer with the event log, comments and the collaboration facts, and one-click claim / start / submit / approve / reject / close / reassign.
   - **按负责人 / By owner** — one lane per owner (alias-folded), so "what is on each person's plate" is answerable at a glance; settled work hides behind a toggle.
@@ -35,7 +35,7 @@ One local task board per dsh workspace. Agents create, claim and progress tasks 
 
 ## The board file
 
-Each workspace gets `<workspace>/.dsh/taskboard.json`:
+By default each workspace gets `<workspace>/.dsh/taskboard.json` (the per-card layout is the next section):
 
 ```jsonc
 {

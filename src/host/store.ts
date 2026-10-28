@@ -1,8 +1,8 @@
 /**
  * Board store for dsh-taskboard-kit.
  *
- * One board per dsh workspace; its only source of truth is a JSON file inside
- * the workspace itself:
+ * One board per dsh workspace; its only source of truth lives inside the
+ * workspace itself, in one of two layouts (v0.9.5, see ./storage.ts):
  *
  *   <cwd>/.dsh/taskboard.json        (mode 0600, written tmp-then-rename)
  *   <cwd>/.dsh/taskboard.json.lock   (O_EXCL lock file while mutating)

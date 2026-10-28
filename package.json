@@ -1,7 +1,7 @@
 {
   "name": "dsh-taskboard-kit",
   "version": "0.9.4",
-  "description": "dsh (DeepSeek Harness) taskboard kit: one local task board per workspace. Agents create/claim/progress tasks with model tools; humans watch and drive the same board in a kanban tab — a single JSON file in the workspace is the only source of truth, no server needed. 给每个 dsh workspace 一块本地任务看板：Agent 用工具认领推进，界面里点「看板」就能协同，数据就是工作区里的一个 JSON 文件。",
+  "description": "dsh (DeepSeek Harness) taskboard kit: one local task board per workspace. Agents create/claim/progress tasks with model tools; humans watch and drive the same board in a kanban tab — one JSON ledger by default or one file per card (v0.9.5), no server needed. 给每个 dsh workspace 一块本地任务看板：Agent 用工具认领推进，界面里点「看板」就能协同，数据在 `.dsh/` 下（默认单文件，v0.9.5 起可选每卡一文件）。",
   "type": "module",
   "main": "lib/index.js",
   "files": [

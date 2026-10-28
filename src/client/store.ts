@@ -7,7 +7,7 @@
  * React layer stays a pure projection of `getState()`.
  *
  * One board per workspace: `setCwd` follows the selected session's directory,
- * `refresh()` re-reads the whole board (it is one small JSON file — no
+ * `refresh()` re-reads the whole board (one small ledger, or the card files — no
  * pagination), and mutations (`create` / `claim` / `update`) re-read it after
  * a successful write so the view always reflects the file. A 15s poll keeps
  * the board fresh while agents work it; the poll only fires while the page is

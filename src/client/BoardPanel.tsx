@@ -1526,6 +1526,7 @@ export function BoardPanel(props: BoardPanelProps): JSX.Element {
           version={TB_VERSION}
           boardFile={state.boardFile}
           cwd={state.cwd}
+          storage={state.boardStorage}
           tasks={tasks.length}
           // 花名册 = the board's own `actors` map (who has been seen here), NOT
           // knownActors() — that one is the union of names MENTIONED by tasks and
@@ -3567,6 +3568,7 @@ function SnippetBlock({ text, label }: { text: string; label: string }): JSX.Ele
  */
 function GuideOverlay({ cli, cwd, boardFile, onClose }: { cli: string | null; cwd: string; boardFile: string | null; onClose(): void }): JSX.Element {
   const file = boardFile ?? '.dsh/taskboard.json'
+  const isDir = !file.endsWith('.json')
   return (
     <>
       <div style={styles.guideBackdrop} onClick={onClose} />
@@ -3581,7 +3583,16 @@ function GuideOverlay({ cli, cwd, boardFile, onClose }: { cli: string | null; cw
           <section style={styles.guideSection}>
             <div style={styles.guideH}>{L('这是什么', 'What this is')}</div>
             <p style={styles.guideP}>
-              {L('每个 workspace 一块任务看板；全部数据就是 {file} 这一个文件——没有服务端、没有账号。在同一个目录里干活的 Agent 和人类，看到的是同一块板。', 'Every workspace has one task board; all its data lives in a single file — {file}. No server, no accounts: agents and humans working in the same directory share the same board.', { file })}
+              {L(
+                '每个 workspace 一块任务看板；数据就在 {file}（{layout}）——没有服务端、没有账号。在同一个目录里干活的 Agent 和人类，看到的是同一块板。',
+                'Every workspace has one task board; its data lives in {file} ({layout}). No server, no accounts: agents and humans working in the same directory share the same board.',
+                {
+                  file,
+                  layout: isDir
+                    ? L('每卡一文件：一张卡一个 JSON', 'one file per card: a JSON per task')
+                    : L('单文件：所有卡在一个 JSON 里', 'single ledger: every card in one JSON'),
+                },
+              )}
             </p>
           </section>
 
@@ -3657,7 +3668,7 @@ function GuideOverlay({ cli, cwd, boardFile, onClose }: { cli: string | null; cw
                 {L('SessionStart = 会话开始自动查板；UserPromptSubmit = 每次发消息顺带查。没有指派时静默不打扰。', 'SessionStart checks the board when a session starts; UserPromptSubmit re-checks on every message. Silent when nothing is assigned — no nagging.')}
               </li>
               <li>
-                {L('没板的项目零打扰：命令自带 [ -f .dsh/taskboard.json ] 守卫。', 'Projects without a board stay untouched: the command is guarded by [ -f .dsh/taskboard.json ].')}
+                {L('没板的项目零打扰：命令自带 `[ -f .dsh/taskboard.json ] || [ -d .dsh/taskboard ]` 守卫（两种布局都认）。', 'Projects without a board stay untouched: the command is guarded by `[ -f .dsh/taskboard.json ] || [ -d .dsh/taskboard ]` (both layouts).')}
               </li>
               <li>
                 {L('改完配置后开新会话生效。', 'Takes effect in a new session after the config change.')}
@@ -3690,16 +3701,17 @@ function GuideOverlay({ cli, cwd, boardFile, onClose }: { cli: string | null; cw
  * The version is never hand-written here: about.ts holds the injected value and
  * the `dev` fallback, scripts/build.mjs is the one place that defines it.
  */
-function AboutOverlay({ version, boardFile, cwd, tasks, roster, boardVersion, onClose }: {
+function AboutOverlay({ version, boardFile, cwd, storage, tasks, roster, boardVersion, onClose }: {
   version: string
   boardFile: string | null
   cwd: string | null
+  storage: 'file' | 'tasks' | null
   tasks: number
   roster: number
   boardVersion: number | null
   onClose(): void
 }): JSX.Element {
-  const facts = aboutFacts({ boardFile, cwd, tasks, roster, boardVersion, pluginId: CLIENT_PLUGIN_ID })
+  const facts = aboutFacts({ boardFile, cwd, storage, tasks, roster, boardVersion, pluginId: CLIENT_PLUGIN_ID })
   return (
     <>
       <div style={styles.aboutBackdrop} onClick={onClose} />
