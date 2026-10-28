@@ -79,10 +79,10 @@ export function ageText(iso: string): string {
   return `${Math.floor(hours / 24)}d`
 }
 
-/** Card/drawer shorthand: T-3 → #3; ids of any other shape display verbatim. */
+/** Card/drawer shorthand: T-3 → #3, T-7K2M → #7K2M; other shapes display verbatim. */
 export function taskRef(id: string): string {
-  const digits = /^T-(\d+)$/.exec(id)?.[1]
-  return digits ? `#${digits}` : id
+  const short = /^T-((?:\d+)|(?:[0-9A-Z]{4}))$/.exec(id)?.[1]
+  return short ? `#${short}` : id
 }
 
 /**

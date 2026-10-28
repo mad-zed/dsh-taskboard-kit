@@ -306,7 +306,11 @@ async function attemptNotify(notice: ReviewerNotice, deps: ReviewerNotifyDeps): 
   }
 
   const key = noticeKey(anchor, board, notice.reviewer)
-  const recorded = (board.review_notices ?? {})[key]
+  // The record lives on the card it is about (v0.9.5): a board-level map would
+  // rewrite the ONE shared file on every submit. The board-level field of older
+  // layouts is still read, and recordNotice() migrates it away lazily.
+  const card = board.tasks[notice.task.id]
+  const recorded = card?.notices?.[key] ?? (board.review_notices ?? {})[key]
   if (recorded) {
     const message = L(
       '{id} 这一轮提交已经通知过 {reviewer}（{at}，幂等跳过）',
@@ -385,12 +389,17 @@ async function attemptNotify(notice: ReviewerNotice, deps: ReviewerNotifyDeps): 
   return { how, reviewer: notice.reviewer, address, ...(reason ? { reason } : {}), hint, message, ...(error ? { error } : {}) }
 }
 
-/** 落一条去重记录（板文件里 `review_notices`；旧板读端容忍缺失，不需要迁移）。 */
+/** 落一条去重记录（v0.9.5 起写在**卡上**；旧板的板级记录顺手迁走）。 */
 async function recordNotice(cwd: string, key: string, record: ReviewNotice): Promise<void> {
   await withBoardLock(cwd, async () => {
     const board = await loadBoard(cwd)
-    const notices = (board.review_notices ??= {})
+    const task = board.tasks[record.task]
+    if (!task) return
+    const notices = (task.notices ??= {})
     notices[key] = record
+    // Lazy migration: the old board-level map is dropped as soon as its entry
+    // has an owner on the card.
+    if (board.review_notices && key in board.review_notices) delete board.review_notices[key]
     await saveBoard(cwd, board)
   })
 }

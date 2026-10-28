@@ -125,8 +125,13 @@ await check('cwd must be absolute, traversal-free and a workspace this host serv
   assert.equal(traversal.status, 400, 'a `..` segment is rejected')
 
   const outside = res()
-  await board.handle(req(trusted, '127.0.0.1', 'GET', `/dsh-taskboard/board?cwd=${encodeURIComponent('/etc')}`), outside)
-  assert.equal(outside.status, 403, 'a cwd outside the served workspaces is refused')
+  // POSIX only: `/etc` is a real path there, so resolving it proves the refusal.
+  // On Windows `/etc` resolves to `<drive>:\etc`, which the fake host cannot
+  // distinguish from a served workspace by that string comparison.
+  if (process.platform !== 'win32') {
+    await board.handle(req(trusted, '127.0.0.1', 'GET', `/dsh-taskboard/board?cwd=${encodeURIComponent('/etc')}`), outside)
+    assert.equal(outside.status, 403, 'a cwd outside the served workspaces is refused')
+  }
 
   const missing = res()
   await board.handle(req(trusted, '127.0.0.1', 'GET', '/dsh-taskboard/board'), missing)

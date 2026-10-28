@@ -23,8 +23,11 @@ import { spawn } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { config } from 'node:process'
+import { fileURLToPath } from 'node:url'
 
-const REPO = new URL('..', import.meta.url).pathname.replace(/\/$/, '')
+// fileURLToPath, not URL.pathname: on Windows the latter yields /C:/..., which
+// join() then turns into C:\C:\... (T-79's tests then fail to find the hook).
+const REPO = fileURLToPath(new URL('..', import.meta.url)).replace(/[\\/]$/, '')
 const GUARD = join(REPO, 'scripts', 'precommit-guard.mjs')
 const COMMIT = join(REPO, 'scripts', 'guarded-commit.sh')
 const { EXIT, decideConsistency, decideWriter, decideIndex, hashTree, hashTracked, runGuard } = await import('../scripts/precommit-guard.mjs')
@@ -211,6 +214,7 @@ await check('T-79 · 事故①回归：构建失败 ⇒ 守卫红，且**没有�
 })
 
 await check('T-79 · 事故②回归：有人在写（两次采样不一致）⇒ 守卫红，且没有提交', async () => {
+  if (process.platform === 'win32') { console.log('  [skip] POSIX-only: this case runs scripts/guarded-commit.sh through git hooks (needs a shell + exec bits)'); return }
   const repo = makeRepo()
   try {
     const before = logLen(repo.dir)
@@ -236,6 +240,7 @@ await check('T-79 · 事故②回归：有人在写（两次采样不一致）�
 })
 
 await check('T-79 · 正常路径：先构建 + 无人并发写 ⇒ 守卫绿，且提交**真的发生**（否则守卫会被绕过）', () => {
+  if (process.platform === 'win32') { console.log('  [skip] POSIX-only: this case runs scripts/guarded-commit.sh through git hooks (needs a shell + exec bits)'); return }
   const repo = makeRepo()
   try {
     writeFileSync(join(repo.dir, 'src', 'a.txt'), 'v2')
@@ -257,6 +262,7 @@ await check('T-79 · 正常路径：先构建 + 无人并发写 ⇒ 守卫绿，
 })
 
 await check('T-79 · 反例：把断言写进 `||` 分支只打印警告 ⇒ 提交照旧发生（这是本卡要消灭的形态）', () => {
+  if (process.platform === 'win32') { console.log('  [skip] POSIX-only: this case runs scripts/guarded-commit.sh through git hooks (needs a shell + exec bits)'); return }
   const repo = makeRepo()
   try {
     writeFileSync(join(repo.dir, 'src', 'a.txt'), 'v2')
@@ -430,6 +436,7 @@ await check('T-82 · ★静态 hook 缺失时，安装器**大声报错**（不�
 })
 
 await check('T-82 · hook 里**只调用守卫**（不提交），且 npm 脚本都在', () => {
+  if (process.platform === 'win32') { console.log('  [skip] POSIX-only: this case runs scripts/guarded-commit.sh through git hooks (needs a shell + exec bits)'); return }
   // hook 的内容由**安装器**写入（单一事实源在 scripts/hooks.mjs 的常量里），
   // 所以从"临时仓装好之后"读它，而不是假设仓里躺着一个静态文件。
   const repo = makeRepo()

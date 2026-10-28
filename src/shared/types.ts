@@ -147,6 +147,14 @@ export interface Task {
   log: TaskLogEntry[]
   /** Information thread (findings / handoffs / test feedback). Oldest first. */
   comments: TaskComment[]
+  /**
+   * reviewer 通知的去重记录（T-56 起），key 同 `board.review_notices`。
+   *
+   * v0.9.5 起从板级挪到卡上：它本来就是「这张卡的这一轮提交」的事实，而板级
+   * 字段会让**每次 submit** 都写一次共享文件 —— 在每任务一文件的布局里，那等于
+   * 把合并冲突从卡文件搬回 meta.json。旧板读端仍容忍板级字段（惰性迁移）。
+   */
+  notices?: Record<string, ReviewNotice>
 }
 
 /**

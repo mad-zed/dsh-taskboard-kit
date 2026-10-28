@@ -22,6 +22,26 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
+import {
+  atomicWrite,
+  boardDirPath,
+  boardFilePath,
+  cardFilePath,
+  displayBoardPath,
+  lockFilePath,
+  metaFilePath,
+  metaText,
+  randomTaskId,
+  readTaskDir,
+  rememberSnapshot,
+  resolveStorageMode,
+  saveTaskDir,
+  snapshotOf,
+  TASK_ID_PATTERN,
+  taskText,
+  type CardSnapshot,
+  type StorageMode,
+} from './storage.ts'
 import type { ErrorCode, UpdateAction } from '../shared/bridge.ts'
 import {
   HUMAN_ACTOR,
@@ -64,10 +84,10 @@ export class StoreError extends Error {
   }
 }
 
-/** Absolute path of the board file for one workspace. */
-export function boardFilePath(cwd: string): string {
-  return join(cwd, '.dsh', 'taskboard.json')
-}
+/** Absolute path of the board file for one workspace (single-file layout). */
+export { boardFilePath }
+/** Absolute path of the card directory (one-file-per-task layout). */
+export { boardDirPath }
 
 // ------------------------------------------------------------------ raw file
 
@@ -79,7 +99,18 @@ export function boardFilePath(cwd: string): string {
  */
 const boardsSeen = new Map<string, number>()
 
+/**
+ * Load the board for `cwd`, whichever layout it uses.
+ *
+ * `file` is the original single ledger; `tasks` is one file per card (see
+ * ./storage.ts). Both return the same `Board`, so every tool, the HTTP bridge
+ * and the panel are layout-blind.
+ */
 export async function loadBoard(cwd: string): Promise<Board> {
+  return (await resolveStorageMode(cwd)) === 'file' ? await loadFileBoard(cwd) : await loadTasksBoard(cwd)
+}
+
+async function loadFileBoard(cwd: string): Promise<Board> {
   const file = boardFilePath(cwd)
   let raw: string
   try {
@@ -210,9 +241,139 @@ export async function loadBoard(cwd: string): Promise<Board> {
   return parsed
 }
 
+/**
+ * The per-card layout: one JSON file per task plus `meta.json`.
+ *
+ * `actors` is deliberately NOT stored. It is evidence, re-derived from the
+ * cards on every load (activity from log/comments, mere naming from
+ * assignee/creator/reviewer/waiting_on). A persisted roster would change the
+ * shared meta file on EVERY action — which is exactly the single hotspot this
+ * layout exists to remove.
+ */
+async function loadTasksBoard(cwd: string): Promise<Board> {
+  const dirRead = await readTaskDir(cwd)
+  if (dirRead.missing) {
+    const seen = boardsSeen.get(resolve(cwd)) ?? 0
+    if (seen > 0) {
+      throw new StoreError(
+        'internal',
+        `the board directory disappeared while this process was running (it held ${seen} task(s) a moment ago); `
+        + 'refusing to treat it as an empty board — restore .dsh/taskboard/ (or restart dsh) and retry',
+      )
+    }
+    return emptyBoard(resolve(cwd))
+  }
+
+  const tasks: Record<string, Task> = {}
+  for (const [id, raw] of dirRead.cards) {
+    let task: Task
+    try {
+      task = JSON.parse(raw) as Task
+    } catch {
+      throw new StoreError('internal', `task file ${id}.json is not valid JSON; fix or remove that one file`)
+    }
+    if (!task || typeof task !== 'object' || Array.isArray(task)) {
+      throw new StoreError('internal', `task file ${id}.json does not hold a task object`)
+    }
+    // The file name is the address; a drifting `id` is healed back to it.
+    task.id = id
+    if (!Array.isArray(task.comments)) task.comments = []
+    if (!Array.isArray(task.log)) task.log = []
+    if (!Array.isArray(task.tags)) task.tags = []
+    if (task.value === undefined) task.value = null
+    if ((task.status as string) === 'cancelled') task.status = 'closed'
+    if (task.reviewer === undefined) task.reviewer = null
+    if (task.waiting_on === undefined) task.waiting_on = null
+    for (const entry of task.log) {
+      if ((entry.event as string) === 'cancelled') entry.event = 'closed'
+    }
+    tasks[id] = task
+  }
+
+  let meta: { version?: unknown; tails?: Board['tails'] } = {}
+  if (dirRead.meta !== null) {
+    try {
+      meta = JSON.parse(dirRead.meta) as typeof meta
+    } catch {
+      throw new StoreError('internal', 'taskboard meta.json is not valid JSON; fix or remove it (the cards are intact)')
+    }
+  }
+  if (meta.version !== undefined && meta.version !== 1) {
+    throw new StoreError('internal', 'unsupported taskboard meta version (expected 1)')
+  }
+
+  const board: Board = {
+    version: 1,
+    workspace: resolve(cwd),
+    next_seq: 1,
+    tasks,
+    actors: {},
+    tails: meta.tails ?? {},
+  }
+  deriveActors(board)
+  boardsSeen.set(resolve(cwd), Object.keys(tasks).length)
+  rememberSnapshot(board, {
+    cards: dirRead.cards,
+    files: dirRead.files,
+    meta: dirRead.meta,
+    seen: Object.keys(tasks).length,
+  })
+  return board
+}
+
+/**
+ * Rebuild the roster from the cards. Two kinds of evidence, kept distinct:
+ *   - activity — a log entry or comment by that name: `last_seen_at` = newest;
+ *   - reference — named as creator/assignee/reviewer/waiting target:
+ *     `last_seen_at` stays null, because being named is not being alive.
+ * Aliases come from the environment, not from history, so nothing is lost.
+ */
+function deriveActors(board: Board): void {
+  const activity = new Map<string, { name: string; at: string }>()
+  const reference = new Map<string, { name: string; at: string }>()
+  const remember = (
+    into: Map<string, { name: string; at: string }>,
+    name: unknown,
+    at: unknown,
+  ): void => {
+    if (typeof name !== 'string' || name.trim() === '' || typeof at !== 'string' || at === '') return
+    const key = actorKey(name)
+    if (!key) return
+    const known = into.get(key)
+    if (!known || at > known.at) into.set(key, { name: name.trim(), at })
+  }
+  for (const task of Object.values(board.tasks)) {
+    for (const entry of task.log ?? []) remember(activity, entry?.by, entry?.at)
+    for (const comment of task.comments ?? []) remember(activity, comment?.by, comment?.at)
+    const at = typeof task.created_at === 'string' && task.created_at ? task.created_at : new Date().toISOString()
+    remember(reference, task.created_by, at)
+    remember(reference, task.assignee, at)
+    remember(reference, task.reviewer, at)
+    remember(reference, task.waiting_on?.who, at)
+  }
+  for (const [, { name, at }] of activity) {
+    board.actors[name] = { kind: kindOf(name), aliases: [], first_seen_at: at, last_seen_at: at }
+  }
+  for (const [key, { name, at }] of reference) {
+    const already = Object.keys(board.actors).some((known) => actorKey(known) === key)
+    if (already) continue
+    board.actors[name] = { kind: kindOf(name), aliases: [], first_seen_at: at, last_seen_at: null }
+  }
+}
+
 let tempCounter = 0
 
 export async function saveBoard(cwd: string, board: Board): Promise<void> {
+  if ((await resolveStorageMode(cwd)) === 'tasks') {
+    // Only the cards whose bytes changed are written; an ordinary action (claim,
+    // start, comment) touches exactly one file, which is what makes two branches
+    // that worked on different cards merge cleanly.
+    const snapshot: CardSnapshot = snapshotOf(board)
+      ?? { cards: new Map(), files: new Map(), meta: null, seen: 0 }
+    await saveTaskDir(cwd, board, snapshot)
+    rememberSnapshot(board, snapshot)
+    return
+  }
   const file = boardFilePath(cwd)
   await mkdir(dirname(file), { recursive: true })
   // Write-then-rename: a crash mid-write must not leave a truncated board.
@@ -259,7 +420,8 @@ export async function enableBoard(
   cwd: string,
   options: { seedProtocol?: boolean } = {},
 ): Promise<EnableResult> {
-  const boardFile = boardFilePath(cwd)
+  const mode = await resolveStorageMode(cwd)
+  const boardFile = mode === 'file' ? boardFilePath(cwd) : boardDirPath(cwd)
   const protocolFile = join(cwd, '.dsh', 'BOARD-PROTOCOL.md')
   const alreadyExisted = await fileExists(boardFile)
 
@@ -293,6 +455,69 @@ async function fileExists(path: string): Promise<boolean> {
   } catch {
     return false
   }
+}
+
+/**
+ * Move one board between layouts. The old artifact is never deleted: it is
+ * renamed in place (`taskboard.json.pre-tasks` / `taskboard.pre-file/`) so a
+ * bad migration is one `git checkout`/rename away from being undone.
+ *
+ * Runs under the same workspace lock as every other write, because a migration
+ * racing an ordinary mutation is the one way to lose a card.
+ */
+export interface MigrateResult {
+  from: 'file' | 'tasks' | 'none'
+  to: StorageMode
+  tasks: number
+  /** Where the previous artifact was kept, or null when there was nothing to keep. */
+  backup: string | null
+}
+
+export async function migrateBoardLayout(cwd: string, target: StorageMode): Promise<MigrateResult> {
+  return withBoardLock(cwd, async () => {
+    const hasFile = await fileExists(boardFilePath(cwd))
+    const hasDir = await fileExists(boardDirPath(cwd))
+
+    if (target === 'tasks') {
+      if (hasDir) return { from: 'tasks', to: 'tasks', tasks: 0, backup: null }
+      if (!hasFile) {
+        await saveTaskDir(cwd, emptyBoard(resolve(cwd)), { cards: new Map(), files: new Map(), meta: null, seen: 0 })
+        return { from: 'none', to: 'tasks', tasks: 0, backup: null }
+      }
+      const board = await loadFileBoard(cwd)
+      foldLegacyNotices(board)
+      await saveTaskDir(cwd, board, { cards: new Map(), files: new Map(), meta: null, seen: 0 })
+      const backup = `${boardFilePath(cwd)}.pre-tasks`
+      await rename(boardFilePath(cwd), backup)
+      return { from: 'file', to: 'tasks', tasks: Object.keys(board.tasks).length, backup }
+    }
+
+    if (hasFile) return { from: 'file', to: 'file', tasks: 0, backup: null }
+    if (!hasDir) {
+      await atomicWrite(boardFilePath(cwd), `${JSON.stringify(emptyBoard(resolve(cwd)), null, 2)}\n`)
+      return { from: 'none', to: 'file', tasks: 0, backup: null }
+    }
+    const board = await loadTasksBoard(cwd)
+    await atomicWrite(boardFilePath(cwd), `${JSON.stringify(board, null, 2)}\n`)
+    const backup = join(cwd, '.dsh', 'taskboard.pre-file')
+    await rm(backup, { recursive: true, force: true })
+    await rename(boardDirPath(cwd), backup)
+    return { from: 'tasks', to: 'file', tasks: Object.keys(board.tasks).length, backup }
+  })
+}
+
+/** Move the pre-v0.9.5 board-level notice records onto the cards they describe. */
+function foldLegacyNotices(board: Board): void {
+  const legacy = board.review_notices
+  if (!legacy) return
+  for (const [key, record] of Object.entries(legacy)) {
+    const task = record?.task ? board.tasks[record.task] : undefined
+    if (!task) continue
+    const notices = (task.notices ??= {})
+    if (!notices[key]) notices[key] = record
+    delete legacy[key]
+  }
+  if (Object.keys(legacy).length === 0) delete board.review_notices
 }
 
 /**
@@ -407,7 +632,10 @@ async function lockHolderPid(lockPath: string): Promise<number | undefined> {
 }
 
 async function acquireBoardLock(cwd: string): Promise<() => Promise<void>> {
-  const lockPath = `${boardFilePath(cwd)}.lock`
+  // One lock per workspace, shared by both layouts: switching layouts is a
+  // migration, and a migration racing an ordinary write is the one race that
+  // could lose a card.
+  const lockPath = lockFilePath(cwd)
   await mkdir(dirname(lockPath), { recursive: true })
   for (let attempt = 0; ; attempt += 1) {
     const token = randomUUID()
@@ -495,8 +723,8 @@ const MAX_TEXT_LENGTH = 50_000
 const MAX_TAG_LENGTH = 100
 const MAX_TAGS = 50
 
-/** `T-<n>` — the only shape that may ever reach a lookup. */
-const TASK_ID = /^T-\d+$/
+/** `T-<n>` (legacy sequential) or `T-7K2M` (per-card random) — the only shapes that may reach a lookup. */
+const TASK_ID = TASK_ID_PATTERN
 
 function requireId(id: unknown): string {
   const value = typeof id === 'string' ? id.trim() : ''
@@ -979,16 +1207,28 @@ export async function createTask(cwd: string, input: CreateTaskInput, by: string
   const tags = parseTags(input?.tags) ?? []
   return withBoardLock(cwd, async () => {
     const board = await loadBoard(cwd)
+    const mode = await resolveStorageMode(cwd)
     const now = new Date().toISOString()
     // Never allocate an id that already exists: `board.tasks[id] = task` would
     // overwrite that task in place, silently. loadBoard heals next_seq, this is
     // the belt to that pair of braces.
-    let id = `T-${board.next_seq}`
-    while (Object.hasOwn(board.tasks, id)) {
-      board.next_seq += 1
+    //
+    // The per-card layout allocates a random id instead of a sequence: a shared
+    // counter is exactly what makes two clones mint the same `T-2` and collide
+    // on merge. A random 4-char id has ~923k values, and a collision inside one
+    // board is checked (and retried) below.
+    let id: string
+    if (mode === 'tasks') {
+      id = randomTaskId()
+      while (Object.hasOwn(board.tasks, id)) id = randomTaskId()
+    } else {
       id = `T-${board.next_seq}`
+      while (Object.hasOwn(board.tasks, id)) {
+        board.next_seq += 1
+        id = `T-${board.next_seq}`
+      }
+      board.next_seq += 1
     }
-    board.next_seq += 1
     const log: TaskLogEntry[] = [logEntry(now, by, 'created')]
     if (assignee) log.push(logEntry(now, by, 'assigned'))
     const task: Task = {

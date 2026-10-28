@@ -113,17 +113,45 @@ function envSiblings(): string[] | undefined {
   return names.length > 0 ? names : undefined
 }
 
-/** The default directory watch: `.dsh/` is created on demand (the board file
- * itself is still only written by the store). */
+/** The default directory watch: `.dsh/` is created on demand (the board itself
+ * is still only ever written by the store).
+ *
+ * Two layouts, two places to look: the single ledger directly under `.dsh/`, and
+ * one file per card under `.dsh/taskboard/`. The card directory is watched
+ * separately because a non-recursive watch does not report grandchildren, and it
+ * is attached lazily — the directory only exists once the workspace uses that
+ * layout (or has migrated to it). */
 function defaultWatchDir(cwd: string, onChange: () => void): () => void {
   const dir = join(cwd, '.dsh')
+  const cardsDir = join(dir, 'taskboard')
   mkdirSync(dir, { recursive: true })
+
+  let cardWatcher: ReturnType<typeof watch> | undefined
+  const attachCards = (): void => {
+    if (cardWatcher) return
+    try {
+      cardWatcher = watch(cardsDir, (_event, filename) => {
+        // tmp+rename shows up as both names; the temp files are not interesting.
+        if (typeof filename === 'string' && filename.endsWith('.json') && !filename.includes('.tmp-')) onChange()
+      })
+      cardWatcher.on('error', () => {})
+    } catch {
+      // The directory does not exist yet; the outer watcher will try again when
+      // it appears (or never, for a workspace that stays on the single file).
+    }
+  }
+
   const watcher = watch(dir, (_event, filename) => {
     // The store's tmp+rename shows up as both names; only the board matters.
     if (filename === 'taskboard.json') onChange()
+    if (filename === 'taskboard') attachCards()
   })
   watcher.on('error', () => {}) // an fs error must never kill the plugin
-  return () => watcher.close()
+  attachCards()
+  return () => {
+    cardWatcher?.close()
+    watcher.close()
+  }
 }
 
 // --------------------------------------------------------------- diffBoards

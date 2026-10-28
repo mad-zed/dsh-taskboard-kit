@@ -30,9 +30,23 @@ import { inbox, loadBoard } from './store.ts'
 import { ageLabel, registerTaskboardTools } from './tools.ts'
 import { createBoardWatcher } from './watch.ts'
 import { resolveCwd } from './workspace.ts'
+import { setStoragePreference, type StoragePreference } from './storage.ts'
 
 export const name = 'taskboard-kit'
 export const inject = ['tools', 'sessions'] as const
+
+/** Bundle patch config (`cordis.patch.yml` → `config:`). */
+export interface Config {
+  /**
+   * Board storage layout.
+   *   auto  — legacy single-file boards stay as they are; a workspace with a
+   *           `.dsh/taskboard/` directory (i.e. after `taskboard migrate --to
+   *           tasks`, or one explicitly opted in) uses one file per card.
+   *   tasks — every board uses one file per card.
+   *   file  — every board uses the original single ledger.
+   */
+  storage?: StoragePreference
+}
 
 // Testable seams: the store, the browser bridge and the workspace resolution
 // are part of the package's public surface, so they can be driven without a
@@ -44,6 +58,7 @@ export {
   actorAliasGroups,
   actorNamesOf,
   addComment,
+  boardDirPath,
   boardFilePath,
   canonicalActor,
   claimTask,
@@ -56,6 +71,7 @@ export {
   inbox,
   listTasks,
   loadBoard,
+  migrateBoardLayout,
   principalKey,
   roster,
   samePrincipal,
@@ -64,6 +80,7 @@ export {
   updateTask,
   withBoardLock,
 } from './store.ts'
+export { displayBoardPath, resolveStorageMode, setStoragePreference, type StorageMode, type StoragePreference } from './storage.ts'
 export { resolveCwd } from './workspace.ts'
 export { L } from './locale.ts'
 export { noticePayload, notifyHuman, notifyHookExample, msg9HookExample, type HumanNotice, type NotifyResult } from './notify.ts'
@@ -307,9 +324,14 @@ function protocolText(): string {
   )
 }
 
-export function apply(ctx: Context): void {
+export function apply(ctx: Context, config: Config = {}): void {
   const log = ctx.logger('taskboard-kit')
-  log.info('taskboard-kit loaded')
+  // Storage layout: `auto` (default) keeps legacy single-file boards and picks
+  // one-file-per-card once a board directory exists; `tasks` opts every board
+  // into that layout; `file` pins the original. The env var is the CLI/agent
+  // side of the same switch (TASKBOARD_STORAGE=file|tasks|auto).
+  setStoragePreference(config.storage)
+  log.info(`taskboard-kit loaded (storage: ${config.storage ?? 'auto'})`)
 
   registerTaskboardTools(ctx)
   log.info('taskboard tools registered (inbox, list, create, claim, update, comment, get, roster)')

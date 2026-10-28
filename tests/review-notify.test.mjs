@@ -48,6 +48,17 @@ async function check(name, fn) {
   }
 }
 
+/**
+ * Every idempotency record on a board, wherever it lives: v0.9.5 keeps them on
+ * the card they describe; older boards still carry the board-level map.
+ */
+function allNotices(board) {
+  const out = []
+  for (const task of Object.values(board.tasks ?? {})) out.push(...Object.values(task.notices ?? {}))
+  out.push(...Object.values(board.review_notices ?? {}))
+  return out
+}
+
 /** 假的 msg9：把 argv 逐行写进 log，按需失败。真进程，但**不是**那支真的 msg9。 */
 async function makeFakeMsg9(dir, { exitCode = 0, stderr = '', log = join(dir, 'argv.txt') } = {}) {
   await mkdir(dir, { recursive: true })
@@ -185,8 +196,8 @@ const unitWs = await mkdtemp(join(tmpdir(), 'dsh-taskboard-review-unit-'))
     assert.equal(again.length, 0, '重放不再轰炸')
     assert.equal(second.hint, '', '重放也不重复刷屏')
     const board = await lib.loadBoard(unitWs)
-    assert.equal(Object.keys(board.review_notices ?? {}).length, 1, '幂等记录落进板里')
-    const record = Object.values(board.review_notices)[0]
+    assert.equal(allNotices(board).length, 1, '幂等记录落进板里')
+    const record = allNotices(board)[0]
     assert.equal(record.how, 'msg9')
     assert.equal(record.reviewer, 'dsh')
     assert.match(record.anchor, new RegExp(`^${task.id}#log:`), '锚点是本轮 submitted 事件')
@@ -210,7 +221,7 @@ await check('② 没有 msg9：降级成可复制提示（不抛、不发送）'
   assert.match(result.hint, /未自动发送/, '并说明没自动发出去')
   assert.ok(logs.some((line) => /未自动发送|没有 msg9/.test(line)), '没发出去也要有日志')
   const board = await lib.loadBoard(unitWs)
-  const record = Object.values(board.review_notices).find((item) => item.task === task.id)
+  const record = allNotices(board).find((item) => item.task === task.id)
   assert.equal(record.how, 'printed')
   assert.equal(record.reason, 'no-msg9')
 })
@@ -305,6 +316,7 @@ await check('TASKBOARD_REVIEW_NOTIFY=off：即使有 msg9 与地址也不发（�
   const submitted = await cli(ws, ['update', id, '--action', 'submit', '--reviewer', 'dsh'], env)
 
   await check('CLI：假 msg9 在 PATH 上 ⇒ submit 成功、真发一次、参数正确、板里有幂等记录', async () => {
+  if (process.platform === 'win32') { console.log('  [skip] POSIX shell fixture: the fake msg9 is a #!/bin/sh script (the send path itself is covered by the injected-fake cases above)'); return }
     assert.equal(submitted.code, 0, `submit 应成功：${submitted.stderr}`)
     const calls = await readCalls(fake.log)
     assert.equal(calls.length, 1, '只发一次')
@@ -317,10 +329,11 @@ await check('TASKBOARD_REVIEW_NOTIFY=off：即使有 msg9 与地址也不发（�
     const board = await lib.loadBoard(ws)
     assert.equal(board.tasks[id].status, 'review')
     assert.equal(board.tasks[id].reviewer, 'dsh')
-    assert.equal(Object.keys(board.review_notices ?? {}).length, 1)
+    assert.equal(allNotices(board).length, 1)
   })
 
   await check('CLI：--json 时 stdout 仍是可解析 JSON（提示走 stderr）', async () => {
+  if (process.platform === 'win32') { console.log('  [skip] POSIX shell fixture: the fake msg9 is a #!/bin/sh script (the send path itself is covered by the injected-fake cases above)'); return }
     const id2 = await claimableCard(ws, 'CLI --json')
     const result = await cli(ws, ['update', id2, '--action', 'submit', '--reviewer', 'dsh', '--json'], env)
     assert.equal(result.code, 0, result.stderr)
@@ -340,6 +353,7 @@ await check('TASKBOARD_REVIEW_NOTIFY=off：即使有 msg9 与地址也不发（�
 
 // ------------------------------------------------- CLI：发送失败不阻断提交
 await check('CLI：假 msg9 退出码非 0 ⇒ submit 仍然成功（核心约束）', async () => {
+  if (process.platform === 'win32') { console.log('  [skip] POSIX shell fixture: the fake msg9 is a #!/bin/sh script (the send path itself is covered by the injected-fake cases above)'); return }
   const ws = await mkdtemp(join(tmpdir(), 'dsh-taskboard-review-fail-'))
   const fake = await makeFakeMsg9(join(ws, 'fake-bin'), { exitCode: 7, stderr: 'no credential for this workspace' })
   const env = { PATH: `${fake.dir}:/usr/bin:/bin` }
@@ -354,7 +368,7 @@ await check('CLI：假 msg9 退出码非 0 ⇒ submit 仍然成功（核心约�
   assert.equal((await readCalls(fake.log)).length, 1, '确实尝试发过')
   assert.match(result.stderr, /发送失败|失败/, '失败要说出来（可见）')
   assert.match(result.stdout, /msg9 send --to 'dsh@msg9\.ice\.msg9\.io'/, '降级成可复制的提示')
-  assert.equal(Object.values(board.review_notices)[0].reason, 'send-failed')
+  assert.equal(allNotices(board)[0].reason, 'send-failed')
 })
 
 // ----------------------------------------------------- CLI：没有 msg9 只打印
@@ -372,7 +386,7 @@ await check('CLI：PATH 里没有 msg9 ⇒ 只打印提示，submit 照常成功
   assert.match(result.stderr, /没有 msg9|未自动发送/, '说清为什么没发出去')
   const board = await lib.loadBoard(ws)
   assert.equal(board.tasks[id].status, 'review')
-  assert.equal(Object.values(board.review_notices)[0].reason, 'no-msg9')
+  assert.equal(allNotices(board)[0].reason, 'no-msg9')
 })
 
 // -------------------------------------------------- CLI：地址未知不猜、不发
@@ -390,6 +404,7 @@ await check('CLI：板里没有他的地址 ⇒ 只打印占位符，且一个�
 
 // ------------------------------- 模型工具路径（T-56 真实现场走的就是这条）
 await check('模型工具 taskboard_update 的 submit 也会通知 reviewer（实测 8/10 张静默卡是 dsh 提交的）', async () => {
+  if (process.platform === 'win32') { console.log('  [skip] POSIX shell fixture: the fake msg9 is a #!/bin/sh script (the send path itself is covered by the injected-fake cases above)'); return }
   const ws = await mkdtemp(join(tmpdir(), 'dsh-taskboard-review-tool-'))
   const fake = await makeFakeMsg9(join(ws, 'fake-bin'))
   const id = await claimableCard(ws, '模型工具路径', 'dsh')
@@ -420,7 +435,7 @@ await check('模型工具 taskboard_update 的 submit 也会通知 reviewer（�
   const board = await lib.loadBoard(ws)
   assert.equal(board.tasks[id].status, 'review')
   assert.equal(board.tasks[id].reviewer, 'kimi')
-  assert.equal(Object.keys(board.review_notices ?? {}).length, 1, '与 CLI 共用同一条幂等记录')
+  assert.equal(allNotices(board).length, 1, '与 CLI 共用同一条幂等记录')
 })
 
 await check('模型工具路径：发送失败也只降级，工具照样成功（不阻断）', async () => {
@@ -446,7 +461,7 @@ await check('模型工具路径：发送失败也只降级，工具照样成功�
   }
   const board = await lib.loadBoard(ws)
   assert.equal(board.tasks[id].status, 'review', '状态照常流转')
-  assert.equal(Object.values(board.review_notices)[0].reason, 'send-failed')
+  assert.equal(allNotices(board)[0].reason, 'send-failed')
 })
 
 // -------------------------------------------------- stale：欠谁审核（分组）

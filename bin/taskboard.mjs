@@ -59,9 +59,14 @@
 
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 
-const lib = await import(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'index.js'))
+// `import()` only accepts URL strings, and on Windows a bare `C:\…` path is not
+// one (Node ≥ 20 throws ERR_UNSUPPORTED_ESM_URL_SCHEME). Convert first: the CLI
+// is the one entry point that has to work on every platform.
+const lib = await import(
+  pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), '..', 'lib', 'index.js')).href,
+)
 const {
   StoreError,
   TASK_VALUES,
@@ -71,6 +76,8 @@ const {
   claimTask,
   columnAgeMs,
   createTask,
+  displayBoardPath,
+  migrateBoardLayout,
   formatGet,
   formatInbox,
   getTask,
@@ -99,7 +106,7 @@ function parseValueFlag(raw) {
 /** Flags that take a value; a bare `--flag` for one of these is a usage error. */
 const VALUE_FLAGS = new Set([
   'action', 'assignee', 'by', 'card', 'cwd', 'days', 'detail', 'file', 'limit', 'note', 'on', 'pool', 'priority',
-  'question', 'reason', 'reset', 'reviewer', 'status', 'tags', 'text', 'title', 'value', 'waiting', 'waive', 'who',
+  'question', 'reason', 'reset', 'reviewer', 'status', 'tags', 'text', 'title', 'to', 'value', 'waiting', 'waive', 'who',
 ])
 /** Switches; every other `--name` must be given a value. */
 const BOOLEAN_FLAGS = new Set(['all', 'json'])
@@ -204,8 +211,18 @@ const USAGE = `commands:
   tails --file <tailId> --card T-42                         把一条尾巴落成卡（收口）
   tails --waive <tailId> --reason "…"                       显式作废一条尾巴（必须给理由）
   tails --reset <tailId>                                    撤掉收口记录（它又回到未收口清单）
-  path                                                      板文件路径
+  path                                                      板路径（单文件布局给文件，每卡一文件布局给目录）
+  migrate --to tasks|file                                   搬存储布局（旧文件不删，改名 taskboard.json.pre-tasks / taskboard.pre-file）
 global: --cwd DIR · --by NAME · --json`
+
+/**
+ * The path this workspace's board lives at, for display/error text only: the
+ * directory in the one-file-per-card layout, the JSON file otherwise.
+ */
+function boardPathOf(cwd) {
+  const dir = join(dirname(boardFilePath(cwd)), 'taskboard')
+  return existsSync(boardFilePath(cwd)) ? boardFilePath(cwd) : existsSync(dir) ? dir : boardFilePath(cwd)
+}
 
 /**
  * Read-only commands must not let a mistyped `--cwd` pass as an empty board:
@@ -213,7 +230,7 @@ global: --cwd DIR · --by NAME · --json`
  * the path out loud on stderr (stdout stays clean, `--json` stays parseable).
  */
 function warnMissingBoard(cwd) {
-  const file = boardFilePath(cwd)
+  const file = boardPathOf(cwd)
   if (existsSync(file)) return
   process.stderr.write(`taskboard: no board file at ${file}\n`)
   process.stderr.write(
@@ -352,8 +369,23 @@ async function main() {
   if (command !== undefined && !checkFlags(flags)) return EXIT.invalid
 
   switch (command) {
+    case 'migrate': {
+      const to = typeof flags.to === 'string' ? flags.to.trim() : ''
+      if (to !== 'tasks' && to !== 'file') {
+        process.stderr.write('taskboard: migrate needs --to tasks|file\n')
+        return EXIT.invalid
+      }
+      const result = await migrateBoardLayout(cwd, to)
+      if (asJson) {
+        print(result, true)
+      } else {
+        console.log(`layout: ${result.from} → ${result.to} (${result.tasks} task(s))`)
+        if (result.backup) console.log(`backup: ${result.backup}`)
+      }
+      return EXIT.ok
+    }
     case 'path':
-      print(boardFilePath(cwd), asJson)
+      print(await displayBoardPath(cwd), asJson)
       return EXIT.ok
     case 'inbox': {
       warnMissingBoard(cwd)

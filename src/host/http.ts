@@ -50,6 +50,7 @@ import {
   loadBoard,
   updateTask,
 } from './store.ts'
+import { boardDirPath, boardMtimeMs, displayBoardPath, resolveStorageMode } from './storage.ts'
 
 export { BRIDGE_PREFIX } from '../shared/bridge.ts'
 
@@ -369,7 +370,9 @@ function requireCwd(deps: TaskboardBridgeDeps, raw: unknown, mutating = false): 
     throw new BridgeError(400, 'invalid-input', '"cwd" must not contain ".."')
   }
   const cwd = resolve(value)
-  if (existsSync(boardFilePath(cwd))) return cwd
+  // Engine of the board = a file (single ledger) or a directory (one per card);
+  // either one proves this workspace has a board.
+  if (existsSync(boardFilePath(cwd)) || existsSync(boardDirPath(cwd))) return cwd
   const verdict = deps.isAllowedCwd?.(cwd)
   // Write: a positive answer is required. Read: only a positive refusal blocks.
   const allowed = mutating ? verdict === true : verdict !== false
@@ -432,18 +435,20 @@ export function createTaskboardBridge(deps: TaskboardBridgeDeps): TaskboardBridg
       const cwd = requireCwd(deps, url.searchParams.get('cwd'))
       try {
         const cli = cliPath()
-        const boardFile = boardFilePath(cwd)
+        const mode = await resolveStorageMode(cwd)
+        const boardFile = await displayBoardPath(cwd)
         return sendJson(res, 200, {
           ok: true,
           board: await deps.loadBoard(cwd),
           cli: cli && existsSync(cli) ? cli : null,
+          storage: mode,
           board_file: boardFile,
           // Reported alongside the board so the panel can tell "no board yet"
           // (offer to enable) apart from "empty board" (offer to create).
           board_exists: existsSync(boardFile),
           // Content freshness marker: the panel drops a snapshot whose mtime
           // is strictly older than the one it already applied (m19).
-          board_mtime: existsSync(boardFile) ? statSync(boardFile).mtimeMs : 0,
+          board_mtime: await boardMtimeMs(cwd, mode),
         })
       } catch (error) {
         if (error instanceof StoreError) {
