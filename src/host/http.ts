@@ -49,6 +49,7 @@ import {
   enableBoard,
   loadBoard,
   updateTask,
+  vanishedCount,
 } from './store.ts'
 import { boardDirPath, boardMtimeMs, displayBoardPath, resolveStorageMode } from './storage.ts'
 
@@ -437,15 +438,20 @@ export function createTaskboardBridge(deps: TaskboardBridgeDeps): TaskboardBridg
         const cli = cliPath()
         const mode = await resolveStorageMode(cwd)
         const boardFile = await displayBoardPath(cwd)
+        const board = await deps.loadBoard(cwd)
+        const vanished = vanishedCount(board)
         return sendJson(res, 200, {
           ok: true,
-          board: await deps.loadBoard(cwd),
+          board,
           cli: cli && existsSync(cli) ? cli : null,
           storage: mode,
           board_file: boardFile,
           // Reported alongside the board so the panel can tell "no board yet"
           // (offer to enable) apart from "empty board" (offer to create).
           board_exists: existsSync(boardFile),
+          // Windows exist for both: the artifacts were there a moment ago and
+          // are gone now. The panel warns and still offers "turn it on again".
+          ...(vanished !== undefined ? { board_vanished: vanished } : {}),
           // Content freshness marker: the panel drops a snapshot whose mtime
           // is strictly older than the one it already applied (m19).
           board_mtime: await boardMtimeMs(cwd, mode),

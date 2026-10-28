@@ -1434,6 +1434,7 @@ export function BoardPanel(props: BoardPanelProps): JSX.Element {
             cli={state.cli}
             busy={state.busy}
             defaultLayout={state.boardStorage ?? 'file'}
+            vanished={state.boardVanished}
             onCreate={() => setCreateOpen(true)}
             onEnable={(layout) => store.enableBoard(layout)}
           />
@@ -1975,6 +1976,7 @@ function EnableBoardWizard({
   cli,
   busy,
   defaultLayout,
+  vanished,
   onCreate,
   onEnable,
 }: {
@@ -1984,6 +1986,8 @@ function EnableBoardWizard({
   busy: boolean
   /** The layout this workspace would get by default (profile `storage`). */
   defaultLayout: 'file' | 'tasks'
+  /** Non-zero when the host saw this board disappear while it had cards. */
+  vanished: number
   onCreate(): void
   onEnable(layout: 'file' | 'tasks'): Promise<{ boardFile: string; protocolFile: string | null; alreadyExisted: boolean } | null>
 }): JSX.Element {
@@ -2057,6 +2061,14 @@ function EnableBoardWizard({
             'Once on, agents collaborate by the protocol: each session starts with its own slice, claims before working, hands off for review, and settles after approval.',
           )}
         </p>
+        {vanished > 0 && (
+          <p style={{ ...styles.wizardWarn, color: WARN }}>
+            {L(
+              `这个工作区之前的看板（${vanished} 张卡）在 dsh 运行期间消失了：现在能读到的是空板，写操作会被拒绝。如果是你删的，重新开启即可；如果不是，先恢复文件——看板数据不会自动重建。`,
+              `This workspace's previous board (${vanished} card(s)) disappeared while dsh was running: the board reads empty and writes are refused. If you deleted it on purpose, turn the board on again; if not, restore the files — cards are not rebuilt automatically.`,
+            )}
+          </p>
+        )}
         <div style={styles.wizardFiles} role="radiogroup" aria-label={L('存储布局', 'Storage layout')}>
           {(['tasks', 'file'] as const).map((value) => (
             <button
@@ -4085,6 +4097,7 @@ const styles: Record<string, CSSProperties> = {
     color: FG,
   },
   wizardMuted: { margin: 0, fontSize: 11, color: DIM },
+  wizardWarn: { margin: 0, fontSize: 11.5, lineHeight: 1.6 },
   wizardActions: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 2 },
   wizardCli: { fontSize: 10.5, color: FAINT, overflowWrap: 'anywhere' },
   errorText: { color: DANGER, fontSize: 12, lineHeight: 1.6, margin: 0, whiteSpace: 'pre-wrap' },

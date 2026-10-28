@@ -92,12 +92,34 @@ export { boardDirPath }
 // ------------------------------------------------------------------ raw file
 
 /**
- * How many tasks this process last saw in each workspace's board. Used to tell
- * "this workspace has no board yet" (a normal first run → empty board) apart
- * from "the board file vanished out from under us" (never a fresh start: see
- * the ENOENT branch in loadBoard).
+ * How many tasks this process last saw in each workspace's board, per LAYOUT.
+ * Used to tell "this workspace has no board yet" (a normal first run → empty
+ * board) apart from "the board vanished out from under us" (see the ENOENT
+ * branches in the loaders).
+ *
+ * Keyed by layout on purpose: a single-file board's count must never mark a
+ * fresh per-card board as "vanished" (or the reverse) — switching layouts is a
+ * normal user action, not data loss.
  */
 const boardsSeen = new Map<string, number>()
+
+function seenKey(cwd: string, mode: StorageMode): string {
+  return `${mode}:${resolve(cwd)}`
+}
+
+/**
+ * Boards that were read as empty because their artifacts disappeared while this
+ * process had seen tasks in them. The READ is allowed (the panel must be able to
+ * offer "turn the board on again"), the WRITE is refused (that is the silent
+ * overwrite this guard exists to prevent). Cleared by construction: a fresh
+ * load that finds an artifact never produces a marked board.
+ */
+const vanishedBoards = new WeakMap<Board, number>()
+
+/** How many tasks a "vanished" read was missing, or undefined for a normal load. */
+export function vanishedCount(board: Board): number | undefined {
+  return vanishedBoards.get(board)
+}
 
 /**
  * Load the board for `cwd`, whichever layout it uses.
@@ -123,17 +145,20 @@ async function loadFileBoard(cwd: string): Promise<Board> {
       // otherwise churning filesystem can make an existing board briefly
       // unreadable (observed in this very workspace: iCloud evicting files
       // mid-read, plus a `git` SIGBUS from mmapping its pack inside the synced
-      // tree). Loading an EMPTY board there is not a harmless read — the next
-      // mutation saves it back and silently replaces every task with the one
-      // being written. So once this process has seen a non-empty board for a
-      // workspace, its disappearance is an error to resolve, not a fresh start.
-      const seen = boardsSeen.get(resolve(cwd)) ?? 0
+      // tree). An empty read there is not harmless: the next mutation saves it
+      // back and silently replaces every task with the one being written.
+      //
+      // The guard therefore sits on the WRITE, not the read (v0.9.6): a read
+      // shows the young truth (empty, not enabled — the panel can offer to
+      // re-enable), while any save of a board that was marked "vanished"
+      // refuses until the files are back or the board is deliberately
+      // re-created. Blocking the read too left the UI with no way out at all:
+      // a human who deleted the board on purpose could not even see the wizard.
+      const seen = boardsSeen.get(seenKey(cwd, 'file')) ?? 0
       if (seen > 0) {
-        throw new StoreError(
-          'internal',
-          `the board file disappeared while this process was running (it held ${seen} task(s) a moment ago); `
-          + 'refusing to treat it as an empty board — restore .dsh/taskboard.json (or restart dsh) and retry',
-        )
+        const empty = emptyBoard(resolve(cwd))
+        vanishedBoards.set(empty, seen)
+        return empty
       }
       return emptyBoard(resolve(cwd))
     }
@@ -237,7 +262,7 @@ async function loadFileBoard(cwd: string): Promise<Board> {
   const currentWorkspace = resolve(cwd)
   if (parsed.workspace !== currentWorkspace) parsed.workspace = currentWorkspace
   // Remember what we saw, so a later disappearance cannot pass as a first run.
-  boardsSeen.set(currentWorkspace, Object.keys(parsed.tasks ?? {}).length)
+  boardsSeen.set(seenKey(cwd, 'file'), Object.keys(parsed.tasks ?? {}).length)
   return parsed
 }
 
@@ -253,15 +278,12 @@ async function loadFileBoard(cwd: string): Promise<Board> {
 async function loadTasksBoard(cwd: string): Promise<Board> {
   const dirRead = await readTaskDir(cwd)
   if (dirRead.missing) {
-    const seen = boardsSeen.get(resolve(cwd)) ?? 0
-    if (seen > 0) {
-      throw new StoreError(
-        'internal',
-        `the board directory disappeared while this process was running (it held ${seen} task(s) a moment ago); `
-        + 'refusing to treat it as an empty board — restore .dsh/taskboard/ (or restart dsh) and retry',
-      )
-    }
-    return emptyBoard(resolve(cwd))
+    // Same split as the single-file loader: reads may show the fresh truth (so
+    // the panel can offer to re-enable), writes over a vanished board refuse.
+    const seen = boardsSeen.get(seenKey(cwd, 'tasks')) ?? 0
+    const empty = emptyBoard(resolve(cwd))
+    if (seen > 0) vanishedBoards.set(empty, seen)
+    return empty
   }
 
   const tasks: Record<string, Task> = {}
@@ -311,7 +333,7 @@ async function loadTasksBoard(cwd: string): Promise<Board> {
     tails: meta.tails ?? {},
   }
   deriveActors(board)
-  boardsSeen.set(resolve(cwd), Object.keys(tasks).length)
+  boardsSeen.set(seenKey(cwd, 'tasks'), Object.keys(tasks).length)
   rememberSnapshot(board, {
     cards: dirRead.cards,
     files: dirRead.files,
@@ -364,6 +386,20 @@ function deriveActors(board: Board): void {
 let tempCounter = 0
 
 export async function saveBoard(cwd: string, board: Board): Promise<void> {
+  // The one case where a read is allowed but a write is not: the board's
+  // artifacts disappeared while this process had seen tasks in them. Saving
+  // this empty snapshot would replace N cards with whatever the caller just
+  // created — the exact silent loss the guard exists for. `enableBoard` writes
+  // directly, so deliberately turning the board on again still works.
+  const vanished = vanishedBoards.get(board)
+  if (vanished !== undefined) {
+    throw new StoreError(
+      'internal',
+      `the board disappeared while this process was running (it held ${vanished} task(s) a moment ago); `
+      + 'refusing to save over it — restore .dsh/taskboard.json or .dsh/taskboard/, '
+      + 'or turn the board on again for this workspace to start a fresh one',
+    )
+  }
   if ((await resolveStorageMode(cwd)) === 'tasks') {
     // Only the cards whose bytes changed are written; an ordinary action (claim,
     // start, comment) touches exactly one file, which is what makes two branches

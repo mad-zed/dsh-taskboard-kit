@@ -117,6 +117,13 @@ export type BoardResponse = {
    */
   storage?: 'file' | 'tasks'
   /**
+   * Present when the board's artifacts disappeared while the host had tasks in
+   * them (v0.9.6): the board reads as empty, but any WRITE refuses until the
+   * files are restored or the board is deliberately turned on again. The panel
+   * warns instead of dead-ending a human who deleted it on purpose.
+   */
+  board_vanished?: number
+  /**
    * mtime (ms) of the board file the snapshot was read from; 0 when no file
    * exists. Lets the panel discard a snapshot that is strictly OLDER than the
    * one already applied — request issue order says nothing about content

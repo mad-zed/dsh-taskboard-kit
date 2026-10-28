@@ -33,6 +33,7 @@ const {
   resolveStorageMode,
   saveBoard,
   updateTask,
+  vanishedCount,
 } = await import('../lib/index.js')
 
 let failed = 0
@@ -290,6 +291,29 @@ await check('a brand-new workspace follows the pinned preference (tasks)', async
   }
 })
 
+
+await check('a deleted single-file board does not poison a workspace that now resolves to the per-card layout', async () => {
+  const ws = await workspace()
+  await migrateBoardLayout(ws, 'file')
+  await createTask(ws, { title: 'gone soon' }, 'dsh')
+  await loadBoard(ws) // this process has seen the single-file board
+  await rm(boardFilePath(ws), { force: true })
+
+  // The profile pins `tasks`, so with nothing on disk this workspace now
+  // resolves to the per-card layout — the deleted FILE board must not mark it
+  // as "vanished" (that was the bug: the panel dead-ended on an error).
+  process.env.TASKBOARD_STORAGE = 'tasks'
+  try {
+    assert.equal(await resolveStorageMode(ws), 'tasks')
+    const board = await loadBoard(ws)
+    assert.deepEqual(Object.keys(board.tasks), [])
+    assert.equal(vanishedCount(board), undefined, 'per-layout counters: the file layout cannot mark the card layout')
+    const enabled = await enableBoard(ws, { layout: 'tasks', seedProtocol: false })
+    assert.equal(enabled.board_file, boardDirPath(ws))
+  } finally {
+    delete process.env.TASKBOARD_STORAGE
+  }
+})
 for (const dir of dirs) await rm(dir, { recursive: true, force: true })
 
 if (failed > 0) {

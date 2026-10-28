@@ -79,6 +79,7 @@ export {
   saveBoard,
   taskStaleness,
   updateTask,
+  vanishedCount,
   withBoardLock,
 } from './store.ts'
 export { displayBoardPath, resolveStorageMode, setStoragePreference, type StorageMode, type StoragePreference } from './storage.ts'

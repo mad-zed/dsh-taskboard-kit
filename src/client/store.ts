@@ -70,6 +70,13 @@ export interface TaskboardState {
    * its default from it; null when the host did not report one (older host).
    */
   boardStorage: 'file' | 'tasks' | null
+  /**
+   * How many cards a vanished board had (v0.9.6). Non-zero means the host saw a
+   * board disappear out from under it: reads show an empty board, but writes
+   * are refused until it is restored or deliberately re-enabled. The wizard
+   * warns instead of dead-ending the human.
+   */
+  boardVanished: number
 }
 
 /** Create/claim/update/comment requests without the cwd (the store fills it in). */
@@ -150,6 +157,7 @@ const INITIAL: TaskboardState = {
   boardFile: null,
   boardExists: false,
   boardStorage: null,
+  boardVanished: 0,
 }
 
 /** Build a store. Tests pass a fake bridge; the app uses the default one. */
@@ -236,6 +244,7 @@ export function createTaskboardStore(options: StoreOptions = {}): TaskboardStore
             boardFile: res.board_file ?? null,
             boardExists: res.board_exists ?? true,
             boardStorage: res.storage ?? null,
+            boardVanished: res.board_vanished ?? 0,
           })
         } else {
           reportPollError(res.error)

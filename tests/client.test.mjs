@@ -1796,6 +1796,25 @@ await check('panel: the wizard takes its default layout from the host (profile p
   assert.ok(html.includes('taskboard migrate'), 'says an existing board keeps its layout')
 })
 
+await check('panel: a deleted board shows the wizard WITH a warning instead of dead-ending', async () => {
+  const board = collabBoard([])
+  const store = client.createTaskboardStore({
+    bridge: {
+      board: async () => ({ ok: true, board, board_exists: false, storage: 'tasks', board_vanished: 3 }),
+    },
+    pollMs: 10 ** 9,
+  })
+  store.setCwd('/w')
+  await store.refresh()
+  assert.equal(store.getState().boardVanished, 3, 'the store keeps the vanished count')
+
+  const html = renderToStaticMarkup(React.createElement(client.BoardPanel, { store }))
+  assert.ok(html.includes('not on for this workspace'), 'the wizard is reachable again')
+  assert.ok(html.includes('3 card(s)'), 'it says how many cards vanished')
+  assert.ok(html.includes('turn the board on again'), 'and offers the way out')
+  assert.ok(!html.includes('Cannot read the board'), 'no dead-end error block')
+})
+
 await check('panel: an ON but empty board asks for a task instead', async () => {
   const board = collabBoard([])
   const store = client.createTaskboardStore({
