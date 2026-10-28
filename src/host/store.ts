@@ -908,6 +908,56 @@ export function actorAliasGroups(): Record<string, string[]> {
   return groups
 }
 
+/**
+ * `别名 → 规范名` 的折叠表（键是 `actorKey`）。声明是**传递**的：`A≡B`、`B≡C`
+ * ⇒ 三者同键，与 `principalGroups()` 的口径一致。
+ *
+ * 只在**读侧**用（见 `declaredSameActor`）：写侧已有 `touchActor` 落别名，权限闸门
+ * 已有 `principalGroups`，唯独 inbox 一直只认名册，于是"卡上写 dsh、会话身份
+ * dsh-agent"在自己清单里查无此人。
+ */
+function aliasFoldTable(groups: Record<string, string[]> = actorAliasGroups()): Map<string, string> {
+  const table = new Map<string, string>()
+  for (const [canonical, aliases] of Object.entries(groups)) {
+    const key = actorKey(canonical)
+    if (!key) continue
+    table.set(key, key)
+    for (const alias of aliases) {
+      const aliasKey = actorKey(alias)
+      if (aliasKey) table.set(aliasKey, key)
+    }
+  }
+  // 声明可以链起来（配置里常把别名组与 watch names 分两处写），所以把每个目标
+  // 沿表追到不动点；追到自身即终点。
+  for (const key of [...table.keys()]) {
+    let target = table.get(key)!
+    const seen = new Set([key])
+    while (table.get(target) !== target && !seen.has(target)) {
+      seen.add(target)
+      target = table.get(target) ?? target
+    }
+    table.set(key, target)
+  }
+  return table
+}
+
+/**
+ * 「是不是同一个 Actor」的读侧版本：明说的等价名（内置 `dsh ≡ dsh-agent`、
+ * `TASKBOARD_ACTOR_ALIASES`、`TASKBOARD_WATCH_NAMES`）也算同一个人。
+ *
+ * 为什么读侧非要有这一层：名册条目里的 `aliases` 通常**是空的** —— 每卡布局不落盘
+ * `actors`（ADR 0001），加载时由日志派生的条目一律 `aliases: []`（见 roster backfill），
+ * 于是 `touchActor` 落下的别名活不过一次 reload。权限闸门早就补过同一层，注释说得
+ * 很清楚：「没有第 2 层，dsh 自己的会话会被自己拒」。同一句话对 inbox 成立：没有它，
+ * dsh 自己的卡不进自己的清单（T-1 实训：卡上写 `dsh`、会话默认身份 `dsh-agent`，
+ * `taskboard_inbox` 报"看板干净"）。
+ */
+function declaredSameActor(a: string | null | undefined, b: string | null | undefined, table: Map<string, string>): boolean {
+  if (!a || !b) return false
+  const fold = (name: string) => table.get(actorKey(name)) ?? actorKey(name)
+  return fold(a) === fold(b)
+}
+
 /** Names that are humans, not agents: `human` plus `TASKBOARD_HUMANS` (逗号分隔). */
 export function humanNames(): string[] {
   const configured = (process.env.TASKBOARD_HUMANS ?? '').split(',').map((name) => name.trim()).filter(Boolean)
@@ -1748,7 +1798,13 @@ export async function listTasks(cwd: string, filter?: ListTasksFilter): Promise<
  */
 export async function inbox(cwd: string, actor: string, options?: InboxOptions): Promise<InboxItem[]> {
   const board = await loadBoard(cwd)
-  return inboxFor(board, actor, options)
+  // 名册优先（它是板上的事实），声明出来的等价名兜底（名册里通常没有别名）。
+  // 折叠表按调用建一次，别在每张卡、每个字段上重建。
+  const table = aliasFoldTable()
+  return inboxFor(board, actor, {
+    ...options,
+    sameActor: (a, b) => sameActor(board, a, b) || declaredSameActor(a, b, table),
+  })
 }
 
 /** 全板协作健康度：交接断了 / 审核没人认领 / 在等人类 / 列陈旧。 */

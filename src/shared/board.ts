@@ -427,6 +427,19 @@ export interface InboxItem {
 }
 
 export interface InboxOptions extends HealthOptions {
+  /**
+   * 别名感知的"是不是同一个 Actor"（`dsh ≡ dsh-agent`）。
+   *
+   * 与 `TailScanOptions.sameActor` 同一个理由、同一个注入点：名册解析住在本模块，
+   * 而声明出来的别名组（内置 `dsh ≡ dsh-agent`、`TASKBOARD_ACTOR_ALIASES`、
+   * `TASKBOARD_WATCH_NAMES`）住在 host 的 store。**名册里通常没有别名**——每卡布局
+   * 不落盘 `actors`（ADR 0001），每次加载由日志派生，派生出来的条目 `aliases: []`。
+   * 所以只走 `sameActor` 的话，「卡上写 dsh、会话身份 dsh-agent」这种最常见的情况
+   * 在 inbox 里就是"查无此人"，而工具描述里明明写着 dsh 与 dsh-agent 是同一个主人。
+   *
+   * 省略时退化成板上的名册比较（对一块裸板跑单测的行为不变）。
+   */
+  sameActor?: (a: string | null | undefined, b: string | null | undefined) => boolean
   /** 待认领池最多推荐几条（默认 3；0 = 不推荐）。 */
   poolLimit?: number
   /** 是否把「在等人类」也列进来（默认 true —— Agent 有责任去叫人）。 */
@@ -468,7 +481,8 @@ export function inboxFor(board: Board, actor: string, options?: InboxOptions): I
   const includeReviewTails = options?.includeReviewTails ?? true
   const tailLimit = options?.tailLimit ?? 3
   const items: InboxItem[] = []
-  const isMe = (name: string | null | undefined) => sameActor(board, name, actor)
+  const isMe = (name: string | null | undefined) =>
+    options?.sameActor ? options.sameActor(name, actor) : sameActor(board, name, actor)
 
   for (const task of Object.values(board.tasks)) {
     // `closed` is settled and gone; `done` is NOT terminal (v0.6) — it still
