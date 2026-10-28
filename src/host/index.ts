@@ -60,6 +60,7 @@ export {
   addComment,
   boardDirPath,
   boardFilePath,
+  boardProtocolDoc,
   canonicalActor,
   claimTask,
   columnAgeMs,

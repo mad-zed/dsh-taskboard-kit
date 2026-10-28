@@ -7,7 +7,8 @@
 
 import assert from 'node:assert/strict'
 import { execFile } from 'node:child_process'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { existsSync } from 'node:fs'
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -143,6 +144,27 @@ ok('cancel still works as the close alias')
 const cleared = JSON.parse(await cli('update', 'T-2', '--value', 'none', '--json'))
 assert.equal(cleared.value, null, '"none" clears the estimate')
 ok('update --value none clears back to unestimated')
+
+// `protocol` prints the template (no write); `--write` refreshes an existing,
+// possibly stale copy. The plugin itself never overwrites a project's doc —
+// this explicit command is how a workspace catches up with the template.
+{
+  const printed = await cli('protocol')
+  assert.match(printed, /本工作区的任务看板约定/, 'prints the doc to stdout')
+  assert.match(printed, /\.dsh\/taskboard\/T-7K2M\.json/, 'mentions the per-card layout')
+  const protocolPath = join(ws, '.dsh', 'BOARD-PROTOCOL.md')
+  assert.equal(existsSync(protocolPath), false, 'printing alone writes nothing')
+
+  await cli('protocol', '--write')
+  assert.equal(existsSync(protocolPath), true, '--write creates the doc')
+  const written = await readFile(protocolPath, 'utf8')
+  assert.equal(written.trim(), printed.trim())
+
+  await writeFile(protocolPath, '# 过期的手写版本\n', 'utf8')
+  await cli('protocol', '--write')
+  assert.match(await readFile(protocolPath, 'utf8'), /本工作区的任务看板约定/, '--write replaces the stale copy')
+  ok('protocol: prints by default, --write refreshes the workspace copy')
+}
 
 await rm(ws, { recursive: true, force: true })
 console.log(`all checks passed (${checks})`)

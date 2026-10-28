@@ -437,7 +437,7 @@ export async function enableBoard(
   let protocolWritten: string | null = null
   if (options.seedProtocol !== false && !(await fileExists(protocolFile))) {
     await mkdir(dirname(protocolFile), { recursive: true })
-    await writeFile(protocolFile, protocolDoc(), { mode: 0o600 })
+    await writeFile(protocolFile, boardProtocolDoc(), { mode: 0o600 })
     protocolWritten = protocolFile
   }
 
@@ -521,25 +521,33 @@ function foldLegacyNotices(board: Board): void {
 }
 
 /**
- * The workspace protocol doc seeded by `enableBoard`.
+ * The workspace protocol doc seed (also printed by `taskboard protocol`).
  *
  * Deliberately short: it points at the plugin's full spec instead of copying
  * it, because a copy would go stale the moment the plugin ships a change. What
  * it DOES state is the part an agent cannot infer — above all that only
  * `closed` is terminal, so `done` still owes a settle.
  */
-function protocolDoc(): string {
+export function boardProtocolDoc(): string {
   return `# 本工作区的任务看板约定
 
 > 本文件由 dsh-taskboard-kit 在「开启看板」时生成，之后**归本工作区所有** —— 可以自由编辑、扩充、
-> 甚至删除；插件不会覆盖它。完整规范见插件自带文档（\`dsh-taskboard-kit/docs/COLLABORATION.md\`），
-> 这里只写本板不可不知的几条。
+> 甚至删除；插件不会覆盖它（要按最新模板重写：\`taskboard protocol --write\`）。
+> 完整规范见插件自带文档（\`dsh-taskboard-kit/docs/COLLABORATION.md\`），这里只写本板不可不知的几条。
 
 ## 唯一事实源
 
-看板就是一个文件：\`.dsh/taskboard.json\`（本目录下）。**永远不要手改它** ——
+看板数据在 \`.dsh/\` 下，两种布局之一：
+
+- 单文件：\`.dsh/taskboard.json\`
+- 每卡一文件：\`.dsh/taskboard/T-7K2M.json\`（一张卡一个文件）+ \`.dsh/taskboard/meta.json\`
+
+\`taskboard path\` 告诉你本工作区当前用哪种。**永远不要手改这些文件** ——
 锁、原子认领、状态机都在工具里，手改会绕过全部保护。用 \`taskboard_*\` 工具，
 或没有插件时的 \`dsh-taskboard-kit/bin/taskboard.mjs\` CLI。
+
+（每卡布局的卡号是随机的 \`T-7K2M\`，不递增；旧卡号 \`T-42\` 原样保留。把板提交进 git 时，
+不同卡的各自动作不会互相冲突，同一张卡被两处改动才会。）
 
 ## 状态机：只有 closed 是终点
 

@@ -58,6 +58,7 @@
  */
 
 import { existsSync } from 'node:fs'
+import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 
@@ -73,6 +74,7 @@ const {
   addComment,
   ageLabel,
   boardFilePath,
+  boardProtocolDoc,
   claimTask,
   columnAgeMs,
   createTask,
@@ -109,7 +111,7 @@ const VALUE_FLAGS = new Set([
   'question', 'reason', 'reset', 'reviewer', 'status', 'tags', 'text', 'title', 'to', 'value', 'waiting', 'waive', 'who',
 ])
 /** Switches; every other `--name` must be given a value. */
-const BOOLEAN_FLAGS = new Set(['all', 'json'])
+const BOOLEAN_FLAGS = new Set(['all', 'json', 'write'])
 
 function parseArgs(argv) {
   const flags = {}
@@ -213,6 +215,7 @@ const USAGE = `commands:
   tails --reset <tailId>                                    撤掉收口记录（它又回到未收口清单）
   path                                                      板路径（单文件布局给文件，每卡一文件布局给目录）
   migrate --to tasks|file                                   搬存储布局（旧文件不删，改名 taskboard.json.pre-tasks / taskboard.pre-file）
+  protocol [--write]                                        打印本工作区的 BOARD-PROTOCOL.md 模板；--write 覆盖现有那份（默认只打印）
 global: --cwd DIR · --by NAME · --json`
 
 /**
@@ -369,8 +372,19 @@ async function main() {
   if (command !== undefined && !checkFlags(flags)) return EXIT.invalid
 
   switch (command) {
-    case 'migrate': {
-      const to = typeof flags.to === 'string' ? flags.to.trim() : ''
+    case 'protocol': {
+      const doc = boardProtocolDoc()
+      if (flags.write) {
+        const target = join(cwd, '.dsh', 'BOARD-PROTOCOL.md')
+        await mkdir(dirname(target), { recursive: true })
+        await writeFile(target, doc, { mode: 0o600 })
+        console.log(`wrote ${target}`)
+      } else {
+        process.stdout.write(doc)
+      }
+      return EXIT.ok
+    }
+    case 'migrate': {      const to = typeof flags.to === 'string' ? flags.to.trim() : ''
       if (to !== 'tasks' && to !== 'file') {
         process.stderr.write('taskboard: migrate needs --to tasks|file\n')
         return EXIT.invalid
