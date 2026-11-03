@@ -45,15 +45,7 @@ export function SessionCardMenuItem(props: SessionCardMenuItemProps): JSX.Elemen
     <button
       type="button"
       role="menuitem"
-      style={{
-        all: 'unset',
-        cursor: 'pointer',
-        display: 'block',
-        width: '100%',
-        padding: '6px 10px',
-        color: 'var(--dsw-alias-label-primary)',
-        font: 'var(--dsw-font-xxs-12)',
-      }}
+      className="tb-rowmenu-item"
       onClick={() => {
         // Dismiss the menu first: the drawer opens over the frame, and a stale
         // open menu would swallow the next click.
@@ -64,7 +56,13 @@ export function SessionCardMenuItem(props: SessionCardMenuItemProps): JSX.Elemen
         store.requestMini(cardId)
       }}
     >
-      {L('在看板中打开 {id}', 'Open {id} on the board', { id: cardId })}
+      {/* The shipped rows lead with a 16px icon; same slot, same size. */}
+      <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2" aria-hidden="true">
+        <rect x="2" y="3" width="3.2" height="10" rx="1" />
+        <rect x="6.4" y="3" width="3.2" height="6.5" rx="1" />
+        <rect x="10.8" y="3" width="3.2" height="8" rx="1" />
+      </svg>
+      <span>{L('在看板中打开 {id}', 'Open {id} on the board', { id: cardId })}</span>
     </button>
   )
 }
