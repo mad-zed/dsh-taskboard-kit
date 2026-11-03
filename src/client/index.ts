@@ -30,6 +30,7 @@ import type { Context } from '@deepseek-ai/cordis'
 import { BoardPanel } from './BoardPanel.tsx'
 import { L } from './locale.ts'
 import { MiniBoardButton, MiniBoardDrawer } from './MiniBoard.tsx'
+import { SessionCardLink } from './SessionCardLink.tsx'
 import { getTaskboardStore } from './store.ts'
 import { ensureTaskboardStyles } from './theme.ts'
 
@@ -41,6 +42,23 @@ export const TASKBOARD_VIEW_ID = 'taskboard'
 /** The composer-side mini board slot ids (entry button + floating drawer). */
 export const MINI_ENTRY_ID = 'taskboard-mini-entry'
 export const MINI_OVERLAY_ID = 'taskboard-mini'
+/** The session-row hover-card link to the card the session title names. */
+export const MINI_ROW_LINK_ID = 'taskboard-row-link'
+
+/**
+ * The `sessions` service, read defensively: the client plugin injects only
+ * `slots`, and an un-provided cordis service throws on read.
+ * @param ctx - browser context.
+ */
+function readSessionsService(ctx: unknown): unknown {
+  try {
+    const getter = (ctx as { get?: unknown }).get
+    if (typeof getter !== 'function') return undefined
+    return (getter as (name: string) => unknown).call(ctx, 'sessions')
+  } catch {
+    return undefined
+  }
+}
 
 // Re-exported so the built bundle can be driven directly by tests (and reused
 // by another client plugin): the store, the components, the bridge, and the
@@ -73,6 +91,7 @@ export {
 } from './BoardPanel.tsx'
 export type { DrawerAction, ActionRow, DrawerProp, DrawerPropGroup, DrawerGroupKey, AssigneeChoice, AssigneeChoices } from './BoardPanel.tsx'
 export { MiniBoardButton, MiniBoardDrawer } from './MiniBoard.tsx'
+export { SessionCardLink, cardIdFromTitle } from './SessionCardLink.tsx'
 export { createBridgeClient } from './api.ts'
 export { createTaskboardStore, getTaskboardStore } from './store.ts'
 export { TB_CSS, TB_TOOLBAR, TB_LANE, CLIENT_PLUGIN_ID, CSS_TAG_ID, ensureTaskboardStyles } from './theme.ts'
@@ -181,6 +200,19 @@ export function apply(raw: Context): void {
       inject: () => ({ store }),
     },
     MiniBoardDrawer,
+  ))
+
+  // Session-row hover card: the row's title may carry `#ZGT4 …` (the host writes
+  // it when the session creates/claims/starts a card), so offer the jump there.
+  ctx.slots.inject('sidebar.session.row.hover', () => ctx.slots.register(
+    {
+      name: 'sidebar.session.row.hover',
+      id: MINI_ROW_LINK_ID,
+      order: 40,
+      label: () => L('看板', 'Board'),
+      inject: () => ({ store, sessions: readSessionsService(ctx) }),
+    },
+    SessionCardLink,
   ))
 
   log.info('taskboard-kit browser face ready (conversation view + status-bar mini board)')
