@@ -55,6 +55,8 @@ export interface TaskboardState {
   miniOpen: boolean
   /** One-shot card the mini drawer opens on next mount (session-row entry). */
   miniRequestId: string | null
+  /** Open only that card's detail — no board behind it (session-row entry). */
+  miniDetailOnly: boolean
   /** A mutation is in flight — action buttons stay disabled meanwhile. */
   busy: boolean
   /** Absolute path of the taskboard CLI (guide interpolation; null = the
@@ -101,8 +103,8 @@ export interface TaskboardStore {
   setIncludeClosed(on: boolean): void
   /** Toggle the composer-side mini board drawer. */
   setMiniOpen(open: boolean): void
-  /** Open the mini drawer on one card; the drawer consumes it on mount. */
-  requestMini(id: string): void
+  /** Open the mini drawer on one card; detailOnly hides the board behind it. */
+  requestMini(id: string, options?: { detailOnly?: boolean }): void
   /** Read and clear the pending card id (drawer mount only). */
   takeMiniRequest(): string | null
   clearError(): void
@@ -159,6 +161,7 @@ const INITIAL: TaskboardState = {
   includeClosed: false,
   miniOpen: false,
   miniRequestId: null,
+  miniDetailOnly: false,
   busy: false,
   cli: null,
   boardFile: null,
@@ -361,11 +364,11 @@ export function createTaskboardStore(options: StoreOptions = {}): TaskboardStore
     setMiniOpen(open) {
       // The mini drawer's own selection is component-local and unmounts with
       // it — nothing to clear here (and the board tab's selectedId is theirs).
-      set(open ? { miniOpen: open } : { miniOpen: open, miniRequestId: null })
+      set(open ? { miniOpen: open } : { miniOpen: open, miniRequestId: null, miniDetailOnly: false })
     },
-    requestMini(id) {
+    requestMini(id, options) {
       // One shot: the drawer reads it on mount, so a later manual pick wins.
-      set({ miniOpen: true, miniRequestId: id })
+      set({ miniOpen: true, miniRequestId: id, miniDetailOnly: options?.detailOnly === true })
     },
     takeMiniRequest() {
       const id = state.miniRequestId

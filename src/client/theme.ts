@@ -136,7 +136,7 @@ export const TB_CSS = `
 /* Session-row「⋯」menu entry: matches the shipped rows (13px, 16px icon slot)
    and must not widen the menu — width:100% plus padding without border-box is
    what produced a horizontal scrollbar. */
-.tb-rowmenu-item { display: flex; align-items: center; gap: 8px; box-sizing: border-box; width: 100%; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-secondary); padding: 6px 8px; font-family: inherit; font-size: 13px; line-height: 20px; text-align: left; cursor: pointer; }
+.tb-rowmenu-item { display: flex; align-items: center; gap: 8px; box-sizing: border-box; width: 100%; border: none; border-radius: 6px; background: transparent; color: inherit; padding: 6px 8px; font-family: inherit; font-size: 13px; line-height: 20px; text-align: left; cursor: pointer; }
 .tb-rowmenu-item:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .tb-rowmenu-item svg { flex: none; }
 .tb-rowmenu-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

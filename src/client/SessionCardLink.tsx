@@ -51,7 +51,7 @@ export function SessionCardMenuItem(props: SessionCardMenuItemProps): JSX.Elemen
       role="menuitem"
       className="tb-rowmenu-item"
       style={{
-        color: 'var(--dsw-alias-label-secondary)',
+        color: 'inherit',
         background: hover ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent',
       }}
       onMouseEnter={() => setHover(true)}
@@ -62,7 +62,8 @@ export function SessionCardMenuItem(props: SessionCardMenuItemProps): JSX.Elemen
           const [, setOpen] = useMenuOpenState()
           setOpen(false)
         }
-        store.requestMini(cardId)
+        // Detail only: the card's drawer, not the whole board.
+        store.requestMini(cardId, { detailOnly: true })
       }}
     >
       {/* The shipped rows lead with a 16px icon; same slot, same size. */}

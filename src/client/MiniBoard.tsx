@@ -275,7 +275,8 @@ function MiniBoardDrawerContent({ store, state, initialSelectedId, initialTab }:
     <div ref={backdropRef} style={styles.backdrop}>
       {/* Click catcher below both drawer layers (no stopPropagation games). */}
       <div style={styles.catcher} onClick={unwind} />
-      <aside style={styles.drawer}>
+      {/* Session-row entry opens the card alone: the board stays out of the way. */}
+      <aside style={state.miniDetailOnly && selected ? { ...styles.drawer, display: 'none' } : styles.drawer}>
         <div style={styles.drawerHead}>
           <span style={styles.drawerTitle}>{L('看板', 'Board')}</span>
           <span style={styles.drawerCount}>{L('{n} 个进行中', '{n} open', { n: openTaskCount(board) })}</span>
@@ -354,7 +355,11 @@ function MiniBoardDrawerContent({ store, state, initialSelectedId, initialTab }:
           state={state}
           store={store}
           actors={actors}
-          onClose={() => setSelectedId(null)}
+          onClose={() => {
+            setSelectedId(null)
+            // Detail-only has no board to fall back to, so closing it closes the drawer.
+            if (state.miniDetailOnly) store.setMiniOpen(false)
+          }}
           onOpenTask={(id) => setSelectedId(id)}
           style={styles.detailOverlay}
           {...(initialTab ? { initialTab } : {})}
