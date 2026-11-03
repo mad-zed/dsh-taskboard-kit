@@ -2,7 +2,7 @@
 
 [![DSH Insights health](https://dsh-insights.com/badge/ice5kysl/dsh-taskboard-kit.svg)](https://dsh-insights.com/p/ice5kysl/dsh-taskboard-kit/)
 
-One local task board per dsh workspace. Agents create, claim and progress tasks with model tools; humans watch and drive the same board in a kanban tab. The board's only source of truth is a single JSON file inside the workspace — **no server, no account system, nothing to deploy**.
+One local task board per dsh workspace. Agents create, claim and progress tasks with model tools; humans watch and drive the same board in a kanban tab. Its data lives inside the workspace — a single JSON ledger by default, or one file per card (v0.9.5) — **no server, no account system, nothing to deploy**.
 
 [中文文档](./README.zh-CN.md)
 
@@ -21,7 +21,7 @@ One local task board per dsh workspace. Agents create, claim and progress tasks 
   - `taskboard_comment` — add an information comment (findings / handoffs / test feedback) without changing state
   - `taskboard_get` — full task detail with the event timeline, the comment thread, column age / SLA, reviewer and wait
   - `taskboard_roster` — who is actually here (last time each actor acted, plus its aliases)
-- **「开启看板 / Turn the board on」** — a fresh workspace shows a one-click wizard instead of an empty board: it creates `.dsh/taskboard.json` AND seeds `.dsh/BOARD-PROTOCOL.md` (the workspace's own rules), then tells you agents can start. Both files are idempotent — an existing board, or a protocol doc the project has edited, is never overwritten. An *on* but empty board shows a different prompt ("create the first card"), because those two states are not the same thing: the first needs enabling before any agent can work, the second just needs work.
+- **「开启看板 / Turn the board on」** — a fresh workspace shows a one-click wizard instead of an empty board: it creates the board (`.dsh/taskboard.json`, or `.dsh/taskboard/` when you pick one file per card) AND seeds `.dsh/BOARD-PROTOCOL.md` (the workspace's own rules), then tells you agents can start. Both files are idempotent — an existing board, or a protocol doc the project has edited, is never overwritten. An *on* but empty board shows a different prompt ("create the first card"), because those two states are not the same thing: the first needs enabling before any agent can work, the second just needs work.
 - **A「看板 / Board」conversation view** in dsh web with three switchable views over the same board:
   - **按进度 / By status** — six swimlanes (pool · assigned · in progress · review · to settle · settled), cards with priority / value / assignee / **current-column age / stale dot / reviewer / who it waits on**, a **`◷ N cards are waiting on you` strip** and a **`✔ N cards done, awaiting settle` strip** at the top (answerable / closeable inline), a detail drawer with the event log, comments and the collaboration facts, and one-click claim / start / submit / approve / reject / close / reassign.
   - **按负责人 / By owner** — one lane per owner (alias-folded), so "what is on each person's plate" is answerable at a glance; settled work hides behind a toggle.
@@ -35,7 +35,7 @@ One local task board per dsh workspace. Agents create, claim and progress tasks 
 
 ## The board file
 
-Each workspace gets `<workspace>/.dsh/taskboard.json`:
+By default each workspace gets `<workspace>/.dsh/taskboard.json` (the per-card layout is the next section):
 
 ```jsonc
 {
@@ -67,6 +67,50 @@ Each workspace gets `<workspace>/.dsh/taskboard.json`:
 ```
 
 Because the file lives in the workspace, every harness and every human working in the same directory sees the same board. Commit it or gitignore it — your call. All mutations go through a lock file with stale-lock recovery and atomic tmp+rename writes, so concurrent agents (or the panel) can never tear the file. `claim` is adjudicated inside the lock: N concurrent claims → exactly one succeeds, the rest get a conflict.
+
+## Two storage layouts (v0.9.5)
+
+The single ledger is one file, and one file is one merge conflict: two clones that each
+create a card both mint `T-2` from the same `next_seq`, and a hand-merge of the duplicate
+JSON key silently drops a card. So the board can also be stored as **one file per card**:
+
+```
+.dsh/taskboard/T-7K2M.json     one card — status, log, comments, notices
+.dsh/taskboard/meta.json       the few board-level facts (tails settlements)
+```
+
+- **Card ids become random** (`T-` + 4 chars) in this layout: no shared counter, so two
+  clones never mint the same id.
+- **A normal action rewrites exactly one file.** The roster (`actors`) is not stored at all
+  — it is re-derived from the cards on load (activity from log/comments; mere naming from
+  assignee/creator/reviewer/waiting_on). A persisted roster would change the shared file on
+  every action, which is the hotspot this layout exists to remove.
+- **Merge behaviour**: different cards → different files → clean merge. The same card edited
+  on two branches → one file → a conflict you actually want to resolve.
+
+Switching is explicit and reversible; the old artifact is kept:
+
+```sh
+taskboard migrate --to tasks      # .dsh/taskboard.json  → .dsh/taskboard/, old file kept as .pre-tasks
+taskboard migrate --to file       # back; the directory is kept as .dsh/taskboard.pre-file/
+taskboard path                    # which one is live
+```
+
+The default is `auto`: a workspace with a `.dsh/taskboard/` directory uses the per-card
+layout, everything else keeps the single ledger — so upgrading changes nothing until you
+migrate. Force it per profile or per shell if you prefer:
+
+```yaml
+# cordis.patch.yml
+- id: taskboard-kit
+  name: dsh-taskboard-kit
+  config: { storage: tasks }      # auto | file | tasks
+```
+
+```sh
+$env:TASKBOARD_STORAGE = 'tasks'  # same switch for the CLI / non-plugin harnesses
+```
+
 
 ## Upgrading to 0.6.0 (read this if you used an older board)
 
@@ -368,6 +412,7 @@ taskboard create --title "…" --priority high --value 3 --by claude
 | `TASKBOARD_NOTIFY_CMD` | shell command run when a card starts waiting on a human, or blows its wait SLA. The card arrives as JSON on stdin plus `TASKBOARD_TASK_ID` / `TASKBOARD_QUESTION` / `TASKBOARD_NOTIFY_REASON` in the env. A failure is logged, never fatal |
 | `TASKBOARDKIT_LOCALE` | `en` forces English tool output (default Chinese) |
 | `TASKBOARD_WATCH` | `0` disables both the change watcher and the self-audit |
+| `TASKBOARD_STORAGE` | `auto` (default) / `file` / `tasks` — storage layout, same switch as the `storage` config (v0.9.5) |
 
 ## Browser bridge
 

@@ -27,9 +27,11 @@ const {
   addComment,
   claimTask,
   createTask,
+  enableBoard,
   getTask,
   loadBoard,
   updateTask,
+  vanishedCount,
   withBoardLock,
 } = await import('../lib/index.js')
 
@@ -261,7 +263,7 @@ await check('claim atomicity still holds after the lock rewrite', async () => {
   assert.equal(final.log.filter((entry) => entry.event === 'claimed').length, 1)
 })
 
-await check('a board that VANISHES is not silently read as empty (nor overwritten)', async () => {
+await check('a board that VANISHES reads empty but can never be written over', async () => {
   const { mkdtemp, rm, unlink } = await import('node:fs/promises')
   const dir = await mkdtemp(join(tmpdir(), 'dsh-taskboard-vanish-'))
   try {
@@ -270,26 +272,37 @@ await check('a board that VANISHES is not silently read as empty (nor overwritte
     await createTask(dir, { title: 'second' }, 'dsh')
     const before = await loadBoard(dir)
     assert.equal(Object.keys(before.tasks).length, 2)
+    assert.equal(vanishedCount(before), undefined, 'a normal load is not marked')
 
-    // The file disappears (iCloud eviction, a move, a churning filesystem).
+    // The file disappears (iCloud eviction, a move, a deleted reset, …).
     await unlink(join(dir, '.dsh', 'taskboard.json'))
 
-    // Reading must fail loudly rather than look like a brand-new workspace…
-    const readError = await loadBoard(dir).then(() => null, (e) => e)
-    assert.ok(readError, 'a vanished board must not read as empty')
-    assert.equal(readError.name, 'StoreError')
-    assert.match(readError.message, /disappeared/)
+    // A READ must not fail: the panel has to be able to offer "turn it on
+    // again" (v0.9.6 — blocking the read left a human who deleted the board
+    // with no way out at all). It does report how much is missing.
+    const empty = await loadBoard(dir)
+    assert.deepEqual(Object.keys(empty.tasks), [], 'the read shows the board as gone')
+    assert.equal(vanishedCount(empty), 2, 'and reports how many cards vanished')
 
-    // …because the next write would otherwise replace both tasks with one.
+    // The WRITE is where a silent loss would happen, so it refuses.
     const writeError = await createTask(dir, { title: 'replacement' }, 'dsh').then(() => null, (e) => e)
     assert.ok(writeError, 'a write over a vanished board must be refused')
     assert.match(writeError.message, /disappeared/)
+    assert.equal((await readdir(join(dir, '.dsh'))).includes('taskboard.json'), false, 'and nothing was re-created')
+
+    // Deliberately turning the board on again is the way out.
+    await enableBoard(dir, { layout: 'file', seedProtocol: false })
+    const afterReset = await loadBoard(dir)
+    assert.equal(vanishedCount(afterReset), undefined, 'the re-created board is a normal one')
+    const card = await createTask(dir, { title: 'after reset' }, 'dsh')
+    assert.equal(card.title, 'after reset')
 
     // A workspace that never had a board is still a normal first run.
-    const fresh = await mkdtemp(join(tmpdir(), 'dsh-taskboard-fresh-'))
-    const empty = await loadBoard(fresh)
-    assert.deepEqual(Object.keys(empty.tasks), [])
-    await rm(fresh, { recursive: true, force: true })
+    const untouched = await mkdtemp(join(tmpdir(), 'dsh-taskboard-fresh-'))
+    const never = await loadBoard(untouched)
+    assert.deepEqual(Object.keys(never.tasks), [])
+    assert.equal(vanishedCount(never), undefined)
+    await rm(untouched, { recursive: true, force: true })
   } finally {
     await rm(dir, { recursive: true, force: true })
   }

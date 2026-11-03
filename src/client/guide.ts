@@ -42,7 +42,7 @@ export function conventionSnippet(cli: string | null): string {
   const bin = cli ?? CLI_FALLBACK
   return L(
     `## 任务看板（所有 Agent 必读）
-本目录有一块共享任务看板，唯一真实来源是 .dsh/taskboard.json。不要手改 JSON，统一用 CLI：
+本目录有一块共享任务看板。数据在 .dsh/ 下：单文件布局是 .dsh/taskboard.json，每卡一文件布局是 .dsh/taskboard/ 目录。**不要手改这些文件**，统一用 CLI：
 TB=${bin}
 node $TB inbox --cwd "$PWD" --by <你的名字>       # ★ 会话开始第一步：现在压在你身上的事（带该敲的命令）
 node $TB list  --cwd "$PWD" --assignee <你的名字>  # 指派给你的任务
@@ -62,7 +62,7 @@ node $TB stale --cwd "$PWD"                       # 协作健康：在等人类 
 - 状态一变就更新；陈旧（review>24h / in_progress>72h）会被自检点名；
 - 你的名字 = harness 名（kimi/claude/dsh）；价值度 --value 1/2|1|2|3|5|8。`,
     `## Task board (required reading for every agent)
-This directory has a shared task board; the single source of truth is .dsh/taskboard.json. Never edit the JSON by hand — always use the CLI:
+This directory has a shared task board. Its data lives under .dsh/: .dsh/taskboard.json (single ledger) or .dsh/taskboard/ (one file per card). **Never edit those files by hand** — always use the CLI:
 TB=${bin}
 node $TB inbox --cwd "$PWD" --by <your-name>       # ★ first thing every session: what is on you (with the command to run)
 node $TB list  --cwd "$PWD" --assignee <your-name> # tasks assigned to you
@@ -89,14 +89,14 @@ export function dispatchSnippet(cli: string | null, cwd: string): string {
   const bin = cli ?? CLI_FALLBACK
   return L(
     `我们在 ${cwd} 有一块共享任务看板（多 Agent 协同），请你加入：
-1) 不要手改 .dsh/taskboard.json，统一用 CLI：TB=${bin}
+1) 不要手改 .dsh/ 下的看板文件（.dsh/taskboard.json 或 .dsh/taskboard/），统一用 CLI：TB=${bin}
 2) 会话开始先跑：node $TB inbox --cwd ${cwd} --by <名字>  # 现在压在你身上的事，带该敲的命令
 3) 流程：动手前先占位（池里 claim / 指派给你的 start）；做完 submit --reviewer <审核人> + comment 交接（不要自己 done）；
    审核用 approve/reject（打回必留 --note）；卡住用 block 说清在等谁
 4) 你的名字 = <名字>（--by 和 assignee 都用它）
 5) 你的第一个任务：T-__（也可自己从待认领池挑）`,
     `We have a shared task board (multi-agent collaboration) in ${cwd} — please join in:
-1) Never edit .dsh/taskboard.json by hand; always use the CLI: TB=${bin}
+1) Never edit the board files under .dsh/ by hand (.dsh/taskboard.json or .dsh/taskboard/); always use the CLI: TB=${bin}
 2) At session start, run: node $TB inbox --cwd ${cwd} --by <name>  # what is on you, each item with its command
 3) Flow: claim / start BEFORE working; when done submit --reviewer <name> + comment a handoff (never mark it done yourself);
    reviewers approve/reject (a reject must carry --note); if stuck, block and say who you are waiting on
@@ -114,7 +114,9 @@ export function dispatchSnippet(cli: string | null, cwd: string): string {
  * agent on the other side, not UI prose.
  */
 function hookCommand(bin: string, name: string): string {
-  return `[ -f .dsh/taskboard.json ] && { OUT=$(node ${bin} inbox --cwd "$PWD" --by ${name} --limit 8 2>/dev/null); case "$OUT" in ""|*"nothing is on you"*|*"没有该你处理的事"*) ;; *) echo "任务看板 · ${name} 现在该处理的："; echo "$OUT";; esac; } || true`
+  // The guard covers BOTH layouts: v0.9.5 can keep the board in a directory, so
+  // a file-only `[ -f … ]` guard would make the hook silently do nothing there.
+  return `if [ -f .dsh/taskboard.json ] || [ -d .dsh/taskboard ]; then OUT=$(node ${bin} inbox --cwd "$PWD" --by ${name} --limit 8 2>/dev/null); case "$OUT" in ""|*"nothing is on you"*|*"没有该你处理的事"*) ;; *) echo "任务看板 · ${name} 现在该处理的："; echo "$OUT";; esac; fi`
 }
 
 /** kimi-code hooks (append to ~/.kimi-code/config.toml): two TOML blocks. */

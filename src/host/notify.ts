@@ -25,6 +25,7 @@
 
 import { spawn } from 'node:child_process'
 import type { Task } from '../shared/types.ts'
+import { displayBoardPath } from './storage.ts'
 
 /** One "the human needs to look at this" event. */
 export interface HumanNotice {
@@ -56,7 +57,7 @@ export interface NotifyDeps {
 }
 
 /** The payload handed to the hook (stdin JSON; also mirrored into env vars). */
-export function noticePayload(notice: HumanNotice): Record<string, unknown> {
+export function noticePayload(notice: HumanNotice, boardPath?: string): Record<string, unknown> {
   return {
     kind: 'taskboard.human',
     reason: notice.reason,
@@ -74,7 +75,9 @@ export function noticePayload(notice: HumanNotice): Record<string, unknown> {
     question: notice.question,
     waiting_by: notice.waitingBy,
     waited_ms: notice.waitedMs,
-    board_file: `${notice.cwd}/.dsh/taskboard.json`,
+    // The actual artifact for this workspace: the JSON file in the single-file
+    // layout, the `.dsh/taskboard/` directory in the per-card one (v0.9.6).
+    board_file: boardPath ?? `${notice.cwd}/.dsh/taskboard.json`,
   }
 }
 
@@ -109,7 +112,8 @@ function defaultRunHook(command: string, payload: string, env: Record<string, st
 export async function notifyHuman(notice: HumanNotice, deps: NotifyDeps): Promise<NotifyResult> {
   const command = process.env.TASKBOARD_NOTIFY_CMD?.trim()
   if (!command) return { delivered: false, how: 'none' }
-  const payload = JSON.stringify(noticePayload(notice), null, 2)
+  const boardPath = await displayBoardPath(notice.cwd).catch(() => undefined)
+  const payload = JSON.stringify(noticePayload(notice, boardPath), null, 2)
   const env = {
     TASKBOARD_NOTIFY_REASON: notice.reason,
     TASKBOARD_TASK_ID: notice.task.id,

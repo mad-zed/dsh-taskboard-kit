@@ -379,6 +379,8 @@ await check('guide snippets: interpolate cli/cwd, degrade on a null cli', () => 
   const fallback = client.conventionSnippet(null)
   assert.ok(fallback.includes('<taskboard 插件目录>/bin/taskboard.mjs'), 'null cli degrades to the placeholder')
   assert.ok(fallback.includes('--cwd "$PWD"'), 'still portable without a cli path')
+  assert.ok(conv.includes('.dsh/taskboard/'), 'the snippets name BOTH layouts, not just the single ledger')
+  assert.ok(conv.includes('Never edit those files by hand'), 'and warn off hand-editing in either layout')
 
   const disp = client.dispatchSnippet('/a/bin/taskboard.mjs', '/w')
   assert.ok(disp.includes('assignee'), 'dispatch teaches the assignee lookup')
@@ -393,6 +395,7 @@ await check('guideProjectDir: the board file location wins over the detected cwd
   assert.equal(client.guideProjectDir('/proj/x/.dsh/taskboard.json', '/elsewhere'), '/proj/x', 'board_file is authoritative')
   assert.equal(client.guideProjectDir(null, '/session/cwd'), '/session/cwd', 'cwd is the fallback')
   assert.equal(client.guideProjectDir(null, null), '<workspace>', 'last-resort placeholder')
+  assert.equal(client.guideProjectDir('/proj/x/.dsh/taskboard', '/elsewhere'), '/proj/x', 'the per-card directory works too')
   assert.equal(client.guideProjectDir('/odd/path/board.json', '/w'), '/w', 'unrecognized board_file shape falls back to cwd')
 })
 
@@ -403,6 +406,7 @@ await check('guide hook snippets: guarded, actor-tagged, silent-when-clean, pars
   const kimi = client.hookSnippetKimi('/a/bin/taskboard.mjs')
   assert.ok(kimi.includes('/a/bin/taskboard.mjs'), 'cli path interpolated')
   assert.ok(kimi.includes('[ -f .dsh/taskboard.json ]'), 'board-file guard present')
+  assert.ok(kimi.includes('[ -d .dsh/taskboard ]'), 'and the per-card directory guard, or the hook would be dead in that layout')
   assert.ok(kimi.includes('inbox --cwd "$PWD" --by kimi'), 'the hook asks for MY inbox, tagged with my name')
   assert.ok(kimi.includes('没有该你处理的事') && kimi.includes('nothing is on you'),
     'the hook stays silent when nothing is on me (both locales)')
@@ -1784,7 +1788,48 @@ await check('panel: an unopened board offers to turn the board on, not "create a
   assert.ok(html.includes('not on for this workspace'), 'the wizard explains the board is off')
   assert.ok(html.includes('Turn the board on'), 'and offers the enable action')
   assert.ok(html.includes('taskboard.json') && html.includes('BOARD-PROTOCOL.md'), 'names both files it will create')
+  assert.ok(html.includes('One file per card') && html.includes('One file'), 'offers BOTH storage layouts')
+  assert.ok(html.includes('.dsh/taskboard/'), 'names the per-card directory')
   assert.ok(!html.includes('has no cards yet'), 'the empty-board prompt is NOT shown')
+})
+
+await check('panel: the wizard takes its default layout from the host (profile pinned to tasks)', async () => {
+  const board = collabBoard([])
+  const store = client.createTaskboardStore({
+    bridge: {
+      board: async () => ({ ok: true, board, board_exists: false, storage: 'tasks' }),
+    },
+    pollMs: 10 ** 9,
+  })
+  store.setCwd('/w')
+  await store.refresh()
+  assert.equal(store.getState().boardStorage, 'tasks', 'the store keeps the reported layout')
+
+  const html = renderToStaticMarkup(React.createElement(client.BoardPanel, { store }))
+  // With the per-card default the "will create" row names the directory (and
+  // must NOT claim it will create the single ledger as the chosen layout).
+  assert.ok(html.includes('.dsh/taskboard/'), 'the per-card directory is the default choice')
+  assert.ok(html.includes('aria-checked=\"true\"'), 'a layout is marked as chosen')
+  assert.ok(html.includes('taskboard migrate'), 'says an existing board keeps its layout')
+})
+
+await check('panel: a deleted board shows the wizard WITH a warning instead of dead-ending', async () => {
+  const board = collabBoard([])
+  const store = client.createTaskboardStore({
+    bridge: {
+      board: async () => ({ ok: true, board, board_exists: false, storage: 'tasks', board_vanished: 3 }),
+    },
+    pollMs: 10 ** 9,
+  })
+  store.setCwd('/w')
+  await store.refresh()
+  assert.equal(store.getState().boardVanished, 3, 'the store keeps the vanished count')
+
+  const html = renderToStaticMarkup(React.createElement(client.BoardPanel, { store }))
+  assert.ok(html.includes('not on for this workspace'), 'the wizard is reachable again')
+  assert.ok(html.includes('3 card(s)'), 'it says how many cards vanished')
+  assert.ok(html.includes('turn the board on again'), 'and offers the way out')
+  assert.ok(!html.includes('Cannot read the board'), 'no dead-end error block')
 })
 
 await check('panel: an ON but empty board asks for a task instead', async () => {
@@ -1808,7 +1853,7 @@ await check('store.enableBoard: posts /enable, then re-reads the board', async (
     bridge: {
       board: async () => ({ ok: true, board: empty, board_exists: calls.length > 0 }),
       enable: async (req) => {
-        calls.push(req.cwd)
+        calls.push(req)
         return { ok: true, board_file: '/w/.dsh/taskboard.json', protocol_file: '/w/.dsh/BOARD-PROTOCOL.md', already_existed: false }
       },
     },
@@ -1819,9 +1864,14 @@ await check('store.enableBoard: posts /enable, then re-reads the board', async (
   assert.equal(store.getState().boardExists, false, 'starts unopened')
 
   const outcome = await store.enableBoard()
-  assert.deepEqual(calls, ['/w'], 'enable was called for the current cwd')
+  assert.deepEqual(calls.map((req) => req.cwd), ['/w'], 'enable was called for the current cwd')
+  assert.equal(calls[0].layout, undefined, 'no layout asked → the host default is used')
   assert.equal(outcome.protocolFile, '/w/.dsh/BOARD-PROTOCOL.md')
   assert.equal(store.getState().boardExists, true, 'the re-read picked up the new board')
+
+  // The wizard's layout choice is forwarded verbatim.
+  await store.enableBoard('tasks')
+  assert.equal(calls[1].layout, 'tasks', 'the chosen layout reaches the host')
 
   // No cwd → nothing to enable, no request fired.
   const idle = client.createTaskboardStore({ bridge: { board: async () => ({ ok: true, board: empty }) }, pollMs: 10 ** 9 })
@@ -3313,12 +3363,13 @@ await check('T-35 · about: the four GitHub entries are the real URLs with zh/en
   // The transparency block is a pure function: it names the real file and the
   // real counts (no server, no cloud — the numbers come from the live board).
   const facts = client.aboutFacts({ boardFile: null, cwd: '/work/a', tasks: 41, roster: 23, boardVersion: 7, pluginId: client.PLUGIN_ID })
-  assert.deepEqual(facts.map((row) => row.key), ['file', 'tasks', 'actors', 'format', 'plugin'])
+  assert.deepEqual(facts.map((row) => row.key), ['file', 'storage', 'tasks', 'actors', 'format', 'plugin'])
   assert.equal(facts[0].value, '/work/a/.dsh/taskboard.json', 'no board_file from the host → the convention path')
-  assert.equal(facts[1].value, '41')
-  assert.equal(facts[2].value, '23')
-  assert.equal(facts[3].value, 'v7', 'board.version is the data-format version')
-  assert.equal(facts[4].value, 'dsh-taskboard-kit')
+  assert.equal(facts[1].value, '—', 'no layout reported → an honest dash, not a guess')
+  assert.equal(facts[2].value, '41')
+  assert.equal(facts[3].value, '23')
+  assert.equal(facts[4].value, 'v7', 'board.version is the data-format version')
+  assert.equal(facts[5].value, 'dsh-taskboard-kit')
   assert.equal(
     client.aboutFacts({ boardFile: '/x/.dsh/taskboard.json', cwd: '/work/a', tasks: 0, roster: 0, boardVersion: null, pluginId: client.PLUGIN_ID })[0].value,
     '/x/.dsh/taskboard.json',
@@ -3332,7 +3383,7 @@ await check('T-35 · about: the ⓘ overlay renders version, facts and 5× targe
     { id: 'T-2', title: 'wip one', status: 'in_progress', assignee: 'kimi' },
   ])
   const store = client.createTaskboardStore({
-    bridge: { board: async () => ({ ok: true, board, board_file: '/work/a/.dsh/taskboard.json' }) },
+    bridge: { board: async () => ({ ok: true, board, board_file: '/work/a/.dsh/taskboard.json', storage: 'file' }) },
     pollMs: 10 ** 9,
   })
   store.setCwd(board.workspace)
@@ -3350,7 +3401,8 @@ await check('T-35 · about: the ⓘ overlay renders version, facts and 5× targe
     const at = html.indexOf(`>${label}</span>`)
     return at < 0 ? '' : html.slice(at, at + 400)
   }
-  assert.ok(factRow('Board file').includes('>/work/a/.dsh/taskboard.json</span>'), 'the real board file path is on screen')
+  assert.ok(factRow('Board location').includes('>/work/a/.dsh/taskboard.json</span>'), 'the real board path is on screen')
+  assert.ok(factRow('Storage').includes('>single ledger</span>'), 'the storage layout is named')
   assert.ok(factRow('Cards').includes('>2</span>'), 'card count = the fixture’s 2 tasks')
   assert.equal(factRow('Roster').includes(`>${Object.keys(board.actors).length}</span>`), true, 'roster size = the board.actors roster')
   assert.ok(factRow('Data format').includes('>v1</span>'), 'board.version')

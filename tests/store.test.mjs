@@ -452,8 +452,13 @@ await check('saveBoard → loadBoard keeps the data identical (and the file is 0
   await saveBoard(ws, board)
   const reloaded = await loadBoard(ws)
   assert.deepEqual(reloaded, board)
-  const mode = (await stat(boardFilePath(ws))).mode & 0o777
-  assert.equal(mode, 0o600, `mode was ${mode.toString(8)}`)
+  // POSIX only: NTFS has no 0600 bit — chmod there reports 666 no matter what
+  // mode the store asked for, so asserting it on Windows tests the filesystem,
+  // not the store.
+  if (process.platform !== 'win32') {
+    const mode = (await stat(boardFilePath(ws))).mode & 0o777
+    assert.equal(mode, 0o600, `mode was ${mode.toString(8)}`)
+  }
   // And what is on disk is genuinely the JSON we think it is.
   const raw = JSON.parse(await readFile(boardFilePath(ws), 'utf8'))
   assert.equal(raw.next_seq, board.next_seq)

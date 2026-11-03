@@ -49,7 +49,9 @@ import {
   enableBoard,
   loadBoard,
   updateTask,
+  vanishedCount,
 } from './store.ts'
+import { boardDirPath, boardMtimeMs, displayBoardPath, resolveStorageMode } from './storage.ts'
 
 export { BRIDGE_PREFIX } from '../shared/bridge.ts'
 
@@ -331,7 +333,7 @@ function requireMutateHeader(req: IncomingMessage): void {
  * an absolute path, no `..` segments, and — when the host can tell — a
  * workspace it actually serves (`deps.isAllowedCwd`). Without the last check a
  * caller could address (and, on a mutation, *create*) any
- * `<dir>/.dsh/taskboard.json` on the machine.
+ * `<dir>/.dsh/` (a JSON ledger or a card directory) on the machine.
  *
  * The whitelist is **live sessions only** (`agents.list()` / `sessions.list()`
  * are live-only), while the panel legitimately shows a workspace whose session
@@ -369,7 +371,9 @@ function requireCwd(deps: TaskboardBridgeDeps, raw: unknown, mutating = false): 
     throw new BridgeError(400, 'invalid-input', '"cwd" must not contain ".."')
   }
   const cwd = resolve(value)
-  if (existsSync(boardFilePath(cwd))) return cwd
+  // Engine of the board = a file (single ledger) or a directory (one per card);
+  // either one proves this workspace has a board.
+  if (existsSync(boardFilePath(cwd)) || existsSync(boardDirPath(cwd))) return cwd
   const verdict = deps.isAllowedCwd?.(cwd)
   // Write: a positive answer is required. Read: only a positive refusal blocks.
   const allowed = mutating ? verdict === true : verdict !== false
@@ -432,18 +436,25 @@ export function createTaskboardBridge(deps: TaskboardBridgeDeps): TaskboardBridg
       const cwd = requireCwd(deps, url.searchParams.get('cwd'))
       try {
         const cli = cliPath()
-        const boardFile = boardFilePath(cwd)
+        const mode = await resolveStorageMode(cwd)
+        const boardFile = await displayBoardPath(cwd)
+        const board = await deps.loadBoard(cwd)
+        const vanished = vanishedCount(board)
         return sendJson(res, 200, {
           ok: true,
-          board: await deps.loadBoard(cwd),
+          board,
           cli: cli && existsSync(cli) ? cli : null,
+          storage: mode,
           board_file: boardFile,
           // Reported alongside the board so the panel can tell "no board yet"
           // (offer to enable) apart from "empty board" (offer to create).
           board_exists: existsSync(boardFile),
+          // Windows exist for both: the artifacts were there a moment ago and
+          // are gone now. The panel warns and still offers "turn it on again".
+          ...(vanished !== undefined ? { board_vanished: vanished } : {}),
           // Content freshness marker: the panel drops a snapshot whose mtime
           // is strictly older than the one it already applied (m19).
-          board_mtime: existsSync(boardFile) ? statSync(boardFile).mtimeMs : 0,
+          board_mtime: await boardMtimeMs(cwd, mode),
         })
       } catch (error) {
         if (error instanceof StoreError) {
@@ -454,14 +465,21 @@ export function createTaskboardBridge(deps: TaskboardBridgeDeps): TaskboardBridg
     }
 
     // Turn the board on for a workspace. The empty-state wizard calls this:
-    // it creates the board file (so the panel stops showing "no board yet") and
+    // it creates the board (single ledger, or one file per card — `layout`) and
     // seeds the workspace protocol doc. Idempotent and never destructive.
     if (method === 'POST' && path === `${BRIDGE_PREFIX}/enable`) {
       requireMutateHeader(req)
       const body = await readJsonBody(req)
       const cwd = requireCwd(deps, body.cwd, true)
+      const layout = body.layout
+      if (layout !== undefined && layout !== 'file' && layout !== 'tasks') {
+        return fail(res, 400, 'invalid-input', '"layout" must be "file" or "tasks"')
+      }
       return runPlain(res, async () => {
-        const result = await deps.enableBoard(cwd, { seedProtocol: body.seed_protocol !== false })
+        const result = await deps.enableBoard(cwd, {
+          seedProtocol: body.seed_protocol !== false,
+          ...(layout ? { layout } : {}),
+        })
         return { ok: true as const, ...result }
       })
     }

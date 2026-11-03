@@ -7,7 +7,7 @@
  * React layer stays a pure projection of `getState()`.
  *
  * One board per workspace: `setCwd` follows the selected session's directory,
- * `refresh()` re-reads the whole board (it is one small JSON file — no
+ * `refresh()` re-reads the whole board (one small ledger, or the card files — no
  * pagination), and mutations (`create` / `claim` / `update`) re-read it after
  * a successful write so the view always reflects the file. A 15s poll keeps
  * the board fresh while agents work it; the poll only fires while the page is
@@ -67,6 +67,18 @@ export interface TaskboardState {
    * first-run shapes apart: absent (needs enabling) vs empty (needs a task).
    */
   boardExists: boolean
+  /**
+   * Which storage layout this workspace uses (v0.9.5). The enable wizard takes
+   * its default from it; null when the host did not report one (older host).
+   */
+  boardStorage: 'file' | 'tasks' | null
+  /**
+   * How many cards a vanished board had (v0.9.6). Non-zero means the host saw a
+   * board disappear out from under it: reads show an empty board, but writes
+   * are refused until it is restored or deliberately re-enabled. The wizard
+   * warns instead of dead-ending the human.
+   */
+  boardVanished: number
 }
 
 /** Create/claim/update/comment requests without the cwd (the store fills it in). */
@@ -95,12 +107,13 @@ export interface TaskboardStore {
   takeMiniRequest(): string | null
   clearError(): void
   /**
-   * Turn the board on for the current workspace: create the board file and
-   * seed `.dsh/BOARD-PROTOCOL.md`. Resolves the host's report (file paths,
-   * whether things already existed) so the wizard can show what happened; null
-   * when there is no cwd or the write failed (error lands on the store).
+   * Turn the board on for the current workspace: create the board (the chosen
+   * layout, or the workspace default) and seed `.dsh/BOARD-PROTOCOL.md`.
+   * Resolves the host's report (file paths, whether things already existed) so
+   * the wizard can show what happened; null when there is no cwd or the write
+   * failed (error lands on the store).
    */
-  enableBoard(): Promise<EnableOutcome | null>
+  enableBoard(layout?: 'file' | 'tasks'): Promise<EnableOutcome | null>
   /** Create a task; resolves true on success so the form can close itself. */
   create(input: CreateInput): Promise<boolean>
   /** Claim a pool task (human self-assign); conflict surfaces as `error`. */
@@ -150,6 +163,8 @@ const INITIAL: TaskboardState = {
   cli: null,
   boardFile: null,
   boardExists: false,
+  boardStorage: null,
+  boardVanished: 0,
 }
 
 /** Build a store. Tests pass a fake bridge; the app uses the default one. */
@@ -235,6 +250,8 @@ export function createTaskboardStore(options: StoreOptions = {}): TaskboardStore
             cli: res.cli ?? null,
             boardFile: res.board_file ?? null,
             boardExists: res.board_exists ?? true,
+            boardStorage: res.storage ?? null,
+            boardVanished: res.board_vanished ?? 0,
           })
         } else {
           reportPollError(res.error)
@@ -358,12 +375,12 @@ export function createTaskboardStore(options: StoreOptions = {}): TaskboardStore
     clearError() {
       set({ error: null })
     },
-    async enableBoard() {
+    async enableBoard(layout) {
       const cwd = state.cwd
       if (!cwd || state.busy) return null
       set({ busy: true, error: null })
       try {
-        const res = await bridge.enable({ cwd })
+        const res = await bridge.enable({ cwd, ...(layout ? { layout } : {}) })
         if (!res.ok) {
           set({ error: res.error ?? 'unknown error' })
           return null

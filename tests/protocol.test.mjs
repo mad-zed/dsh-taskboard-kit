@@ -327,6 +327,18 @@ await check('enableBoard: creates the board and the workspace protocol doc', asy
   await rm(ws, { recursive: true, force: true })
 })
 
+await check('the seeded protocol doc names BOTH storage layouts, and how to find out which is live', async () => {
+  const ws = await freshWorkspace()
+  await lib.enableBoard(ws)
+  const doc = await readFile(join(ws, '.dsh', 'BOARD-PROTOCOL.md'), 'utf8')
+  assert.match(doc, /\.dsh\/taskboard\.json/, 'names the single-file layout')
+  assert.match(doc, /\.dsh\/taskboard\/T-7K2M\.json/, 'names the per-card layout')
+  assert.match(doc, /taskboard path/, 'says how to tell which one this workspace uses')
+  assert.match(doc, /protocol --write/, 'says how to refresh a stale copy')
+  assert.equal(doc, lib.boardProtocolDoc(), 'the seeded file is exactly the template')
+  await rm(ws, { recursive: true, force: true })
+})
+
 await check('enableBoard: is idempotent and NEVER rewrites existing data', async () => {
   const ws = await freshWorkspace()
   await lib.enableBoard(ws)

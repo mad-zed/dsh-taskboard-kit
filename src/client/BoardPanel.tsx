@@ -1433,8 +1433,10 @@ export function BoardPanel(props: BoardPanelProps): JSX.Element {
             boardFile={state.boardFile}
             cli={state.cli}
             busy={state.busy}
+            defaultLayout={state.boardStorage ?? 'file'}
+            vanished={state.boardVanished}
             onCreate={() => setCreateOpen(true)}
-            onEnable={() => store.enableBoard()}
+            onEnable={(layout) => store.enableBoard(layout)}
           />
         )
       ) : state.groupBy === 'stats' ? (
@@ -1524,6 +1526,7 @@ export function BoardPanel(props: BoardPanelProps): JSX.Element {
           version={TB_VERSION}
           boardFile={state.boardFile}
           cwd={state.cwd}
+          storage={state.boardStorage}
           tasks={tasks.length}
           // 花名册 = the board's own `actors` map (who has been seen here), NOT
           // knownActors() — that one is the union of names MENTIONED by tasks and
@@ -1973,6 +1976,8 @@ function EnableBoardWizard({
   boardFile,
   cli,
   busy,
+  defaultLayout,
+  vanished,
   onCreate,
   onEnable,
 }: {
@@ -1980,15 +1985,29 @@ function EnableBoardWizard({
   boardFile: string | null
   cli: string | null
   busy: boolean
+  /** The layout this workspace would get by default (profile `storage`). */
+  defaultLayout: 'file' | 'tasks'
+  /** Non-zero when the host saw this board disappear while it had cards. */
+  vanished: number
   onCreate(): void
-  onEnable(): Promise<{ boardFile: string; protocolFile: string | null; alreadyExisted: boolean } | null>
+  onEnable(layout: 'file' | 'tasks'): Promise<{ boardFile: string; protocolFile: string | null; alreadyExisted: boolean } | null>
 }): JSX.Element {
+  const [layout, setLayout] = useState<'file' | 'tasks'>(defaultLayout)
   const [result, setResult] = useState<{ boardFile: string; protocolFile: string | null; alreadyExisted: boolean } | null>(null)
   const projectDir = guideProjectDir(boardFile, cwd)
 
+  /** `.dsh/taskboard/` or `.dsh/taskboard.json` — what the enable will create. */
+  const boardPathLabel = (value: 'file' | 'tasks'): string =>
+    value === 'tasks' ? '.dsh/taskboard/' : '.dsh/taskboard.json'
+  const relativeOf = (abs: string): string => {
+    const norm = abs.replace(/\\/g, '/')
+    const at = norm.indexOf('/.dsh/')
+    return at >= 0 ? norm.slice(at + 1) : norm
+  }
+
   const enable = async (): Promise<void> => {
     if (busy) return
-    const outcome = await onEnable()
+    const outcome = await onEnable(layout)
     if (outcome) setResult(outcome)
   }
 
@@ -2005,7 +2024,7 @@ function EnableBoardWizard({
           <ul style={styles.wizardFiles}>
             <li style={styles.wizardFile}>
               <span style={styles.wizardFileLabel}>{L('看板数据', 'Board data')}</span>
-              <code style={styles.wizardCode} title={result.boardFile}>.dsh/taskboard.json</code>
+              <code style={styles.wizardCode} title={result.boardFile}>{relativeOf(result.boardFile)}</code>
             </li>
             <li style={styles.wizardFile}>
               <span style={styles.wizardFileLabel}>{L('工作区规范', 'Rules')}</span>
@@ -2043,10 +2062,41 @@ function EnableBoardWizard({
             'Once on, agents collaborate by the protocol: each session starts with its own slice, claims before working, hands off for review, and settles after approval.',
           )}
         </p>
+        {vanished > 0 && (
+          <p style={{ ...styles.wizardWarn, color: WARN }}>
+            {L(
+              `这个工作区之前的看板（${vanished} 张卡）在 dsh 运行期间消失了：现在能读到的是空板，写操作会被拒绝。如果是你删的，重新开启即可；如果不是，先恢复文件——看板数据不会自动重建。`,
+              `This workspace's previous board (${vanished} card(s)) disappeared while dsh was running: the board reads empty and writes are refused. If you deleted it on purpose, turn the board on again; if not, restore the files — cards are not rebuilt automatically.`,
+            )}
+          </p>
+        )}
+        <div style={styles.wizardFiles} role="radiogroup" aria-label={L('存储布局', 'Storage layout')}>
+          {(['tasks', 'file'] as const).map((value) => (
+            <button
+              key={value}
+              type="button"
+              role="radio"
+              aria-checked={layout === value}
+              className={layout === value ? 'tb-chip active' : 'tb-chip'}
+              style={styles.wizardLayoutOption}
+              onClick={() => setLayout(value)}
+            >
+              <span style={styles.wizardLayoutHead}>
+                <span>{value === 'tasks' ? L('每卡一文件', 'One file per card') : L('单文件', 'One file')}</span>
+                <code style={styles.wizardCode}>{boardPathLabel(value)}</code>
+              </span>
+              <span style={styles.wizardMuted}>
+                {value === 'tasks'
+                  ? L('一张卡一个文件；两台机器各自建卡，git 合并不会因为同一张表而冲突', 'One file per card — two machines adding cards never collide on one table when merged')
+                  : L('所有卡放在同一个 JSON 里；单机或旧工具最省事', 'Every card in one JSON — simplest for one machine or older tooling')}
+              </span>
+            </button>
+          ))}
+        </div>
         <ul style={styles.wizardFiles}>
           <li style={styles.wizardFile}>
             <span style={styles.wizardFileLabel}>{L('会创建', 'Will create')}</span>
-            <code style={styles.wizardCode} title={`${projectDir}/.dsh/taskboard.json`}>.dsh/taskboard.json</code>
+            <code style={styles.wizardCode} title={`${projectDir}/${boardPathLabel(layout)}`}>{boardPathLabel(layout)}</code>
             <span style={styles.wizardMuted}>{L('看板数据', 'board data')}</span>
           </li>
           <li style={styles.wizardFile}>
@@ -2056,7 +2106,10 @@ function EnableBoardWizard({
           </li>
         </ul>
         <p style={styles.wizardMuted}>
-          {L('两者都已存在时不会覆盖任何东西。', 'Neither is overwritten if it already exists.')}
+          {L(
+            '两者都已存在时不会覆盖任何东西；已有看板的布局也不会被这里的选择改掉（要转换用 taskboard migrate）。',
+            'Neither is overwritten if it already exists, and an existing board keeps its layout (use taskboard migrate to convert).',
+          )}
         </p>
         <div style={styles.wizardActions}>
           <button type="button" className="tb-btn tb-btn-primary" disabled={busy} onClick={() => void enable()}>
@@ -3515,6 +3568,7 @@ function SnippetBlock({ text, label }: { text: string; label: string }): JSX.Ele
  */
 function GuideOverlay({ cli, cwd, boardFile, onClose }: { cli: string | null; cwd: string; boardFile: string | null; onClose(): void }): JSX.Element {
   const file = boardFile ?? '.dsh/taskboard.json'
+  const isDir = !file.endsWith('.json')
   return (
     <>
       <div style={styles.guideBackdrop} onClick={onClose} />
@@ -3529,7 +3583,16 @@ function GuideOverlay({ cli, cwd, boardFile, onClose }: { cli: string | null; cw
           <section style={styles.guideSection}>
             <div style={styles.guideH}>{L('这是什么', 'What this is')}</div>
             <p style={styles.guideP}>
-              {L('每个 workspace 一块任务看板；全部数据就是 {file} 这一个文件——没有服务端、没有账号。在同一个目录里干活的 Agent 和人类，看到的是同一块板。', 'Every workspace has one task board; all its data lives in a single file — {file}. No server, no accounts: agents and humans working in the same directory share the same board.', { file })}
+              {L(
+                '每个 workspace 一块任务看板；数据就在 {file}（{layout}）——没有服务端、没有账号。在同一个目录里干活的 Agent 和人类，看到的是同一块板。',
+                'Every workspace has one task board; its data lives in {file} ({layout}). No server, no accounts: agents and humans working in the same directory share the same board.',
+                {
+                  file,
+                  layout: isDir
+                    ? L('每卡一文件：一张卡一个 JSON', 'one file per card: a JSON per task')
+                    : L('单文件：所有卡在一个 JSON 里', 'single ledger: every card in one JSON'),
+                },
+              )}
             </p>
           </section>
 
@@ -3605,7 +3668,7 @@ function GuideOverlay({ cli, cwd, boardFile, onClose }: { cli: string | null; cw
                 {L('SessionStart = 会话开始自动查板；UserPromptSubmit = 每次发消息顺带查。没有指派时静默不打扰。', 'SessionStart checks the board when a session starts; UserPromptSubmit re-checks on every message. Silent when nothing is assigned — no nagging.')}
               </li>
               <li>
-                {L('没板的项目零打扰：命令自带 [ -f .dsh/taskboard.json ] 守卫。', 'Projects without a board stay untouched: the command is guarded by [ -f .dsh/taskboard.json ].')}
+                {L('没板的项目零打扰：命令自带 `[ -f .dsh/taskboard.json ] || [ -d .dsh/taskboard ]` 守卫（两种布局都认）。', 'Projects without a board stay untouched: the command is guarded by `[ -f .dsh/taskboard.json ] || [ -d .dsh/taskboard ]` (both layouts).')}
               </li>
               <li>
                 {L('改完配置后开新会话生效。', 'Takes effect in a new session after the config change.')}
@@ -3638,16 +3701,17 @@ function GuideOverlay({ cli, cwd, boardFile, onClose }: { cli: string | null; cw
  * The version is never hand-written here: about.ts holds the injected value and
  * the `dev` fallback, scripts/build.mjs is the one place that defines it.
  */
-function AboutOverlay({ version, boardFile, cwd, tasks, roster, boardVersion, onClose }: {
+function AboutOverlay({ version, boardFile, cwd, storage, tasks, roster, boardVersion, onClose }: {
   version: string
   boardFile: string | null
   cwd: string | null
+  storage: 'file' | 'tasks' | null
   tasks: number
   roster: number
   boardVersion: number | null
   onClose(): void
 }): JSX.Element {
-  const facts = aboutFacts({ boardFile, cwd, tasks, roster, boardVersion, pluginId: CLIENT_PLUGIN_ID })
+  const facts = aboutFacts({ boardFile, cwd, storage, tasks, roster, boardVersion, pluginId: CLIENT_PLUGIN_ID })
   return (
     <>
       <div style={styles.aboutBackdrop} onClick={onClose} />
@@ -4024,6 +4088,17 @@ const styles: Record<string, CSSProperties> = {
   wizardTitle: { margin: 0, fontSize: 13.5, fontWeight: 600 },
   wizardText: { margin: 0, fontSize: 12, lineHeight: 1.65, color: FG },
   wizardFiles: { listStyle: 'none', margin: 0, padding: 0, display: 'flex', flexDirection: 'column', gap: 5 },
+  wizardLayoutOption: {
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'flex-start',
+    gap: 3,
+    textAlign: 'left',
+    height: 'auto',
+    lineHeight: 1.55,
+    padding: '7px 10px',
+  },
+  wizardLayoutHead: { display: 'flex', alignItems: 'baseline', gap: 8, width: '100%', justifyContent: 'space-between' },
   wizardFile: { display: 'flex', alignItems: 'baseline', gap: 10, fontSize: 11.5, flexWrap: 'wrap' },
   wizardFileLabel: { color: DIM, flexShrink: 0, minWidth: 62 },
   wizardCode: {
@@ -4034,6 +4109,7 @@ const styles: Record<string, CSSProperties> = {
     color: FG,
   },
   wizardMuted: { margin: 0, fontSize: 11, color: DIM },
+  wizardWarn: { margin: 0, fontSize: 11.5, lineHeight: 1.6 },
   wizardActions: { display: 'flex', gap: 8, flexWrap: 'wrap', marginTop: 2 },
   wizardCli: { fontSize: 10.5, color: FAINT, overflowWrap: 'anywhere' },
   errorText: { color: DANGER, fontSize: 12, lineHeight: 1.6, margin: 0, whiteSpace: 'pre-wrap' },

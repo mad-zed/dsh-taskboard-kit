@@ -1,8 +1,8 @@
 /**
  * Board store for dsh-taskboard-kit.
  *
- * One board per dsh workspace; its only source of truth is a JSON file inside
- * the workspace itself:
+ * One board per dsh workspace; its only source of truth lives inside the
+ * workspace itself, in one of two layouts (v0.9.5, see ./storage.ts):
  *
  *   <cwd>/.dsh/taskboard.json        (mode 0600, written tmp-then-rename)
  *   <cwd>/.dsh/taskboard.json.lock   (O_EXCL lock file while mutating)
@@ -22,6 +22,26 @@
 import { randomUUID } from 'node:crypto'
 import { mkdir, open, readFile, rename, rm, stat, writeFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
+import {
+  atomicWrite,
+  boardDirPath,
+  boardFilePath,
+  cardFilePath,
+  displayBoardPath,
+  lockFilePath,
+  metaFilePath,
+  metaText,
+  randomTaskId,
+  readTaskDir,
+  rememberSnapshot,
+  resolveStorageMode,
+  saveTaskDir,
+  snapshotOf,
+  TASK_ID_PATTERN,
+  taskText,
+  type CardSnapshot,
+  type StorageMode,
+} from './storage.ts'
 import type { ErrorCode, UpdateAction } from '../shared/bridge.ts'
 import {
   HUMAN_ACTOR,
@@ -64,22 +84,55 @@ export class StoreError extends Error {
   }
 }
 
-/** Absolute path of the board file for one workspace. */
-export function boardFilePath(cwd: string): string {
-  return join(cwd, '.dsh', 'taskboard.json')
-}
+/** Absolute path of the board file for one workspace (single-file layout). */
+export { boardFilePath }
+/** Absolute path of the card directory (one-file-per-task layout). */
+export { boardDirPath }
 
 // ------------------------------------------------------------------ raw file
 
 /**
- * How many tasks this process last saw in each workspace's board. Used to tell
- * "this workspace has no board yet" (a normal first run → empty board) apart
- * from "the board file vanished out from under us" (never a fresh start: see
- * the ENOENT branch in loadBoard).
+ * How many tasks this process last saw in each workspace's board, per LAYOUT.
+ * Used to tell "this workspace has no board yet" (a normal first run → empty
+ * board) apart from "the board vanished out from under us" (see the ENOENT
+ * branches in the loaders).
+ *
+ * Keyed by layout on purpose: a single-file board's count must never mark a
+ * fresh per-card board as "vanished" (or the reverse) — switching layouts is a
+ * normal user action, not data loss.
  */
 const boardsSeen = new Map<string, number>()
 
+function seenKey(cwd: string, mode: StorageMode): string {
+  return `${mode}:${resolve(cwd)}`
+}
+
+/**
+ * Boards that were read as empty because their artifacts disappeared while this
+ * process had seen tasks in them. The READ is allowed (the panel must be able to
+ * offer "turn the board on again"), the WRITE is refused (that is the silent
+ * overwrite this guard exists to prevent). Cleared by construction: a fresh
+ * load that finds an artifact never produces a marked board.
+ */
+const vanishedBoards = new WeakMap<Board, number>()
+
+/** How many tasks a "vanished" read was missing, or undefined for a normal load. */
+export function vanishedCount(board: Board): number | undefined {
+  return vanishedBoards.get(board)
+}
+
+/**
+ * Load the board for `cwd`, whichever layout it uses.
+ *
+ * `file` is the original single ledger; `tasks` is one file per card (see
+ * ./storage.ts). Both return the same `Board`, so every tool, the HTTP bridge
+ * and the panel are layout-blind.
+ */
 export async function loadBoard(cwd: string): Promise<Board> {
+  return (await resolveStorageMode(cwd)) === 'file' ? await loadFileBoard(cwd) : await loadTasksBoard(cwd)
+}
+
+async function loadFileBoard(cwd: string): Promise<Board> {
   const file = boardFilePath(cwd)
   let raw: string
   try {
@@ -92,17 +145,20 @@ export async function loadBoard(cwd: string): Promise<Board> {
       // otherwise churning filesystem can make an existing board briefly
       // unreadable (observed in this very workspace: iCloud evicting files
       // mid-read, plus a `git` SIGBUS from mmapping its pack inside the synced
-      // tree). Loading an EMPTY board there is not a harmless read — the next
-      // mutation saves it back and silently replaces every task with the one
-      // being written. So once this process has seen a non-empty board for a
-      // workspace, its disappearance is an error to resolve, not a fresh start.
-      const seen = boardsSeen.get(resolve(cwd)) ?? 0
+      // tree). An empty read there is not harmless: the next mutation saves it
+      // back and silently replaces every task with the one being written.
+      //
+      // The guard therefore sits on the WRITE, not the read (v0.9.6): a read
+      // shows the young truth (empty, not enabled — the panel can offer to
+      // re-enable), while any save of a board that was marked "vanished"
+      // refuses until the files are back or the board is deliberately
+      // re-created. Blocking the read too left the UI with no way out at all:
+      // a human who deleted the board on purpose could not even see the wizard.
+      const seen = boardsSeen.get(seenKey(cwd, 'file')) ?? 0
       if (seen > 0) {
-        throw new StoreError(
-          'internal',
-          `the board file disappeared while this process was running (it held ${seen} task(s) a moment ago); `
-          + 'refusing to treat it as an empty board — restore .dsh/taskboard.json (or restart dsh) and retry',
-        )
+        const empty = emptyBoard(resolve(cwd))
+        vanishedBoards.set(empty, seen)
+        return empty
       }
       return emptyBoard(resolve(cwd))
     }
@@ -206,13 +262,154 @@ export async function loadBoard(cwd: string): Promise<Board> {
   const currentWorkspace = resolve(cwd)
   if (parsed.workspace !== currentWorkspace) parsed.workspace = currentWorkspace
   // Remember what we saw, so a later disappearance cannot pass as a first run.
-  boardsSeen.set(currentWorkspace, Object.keys(parsed.tasks ?? {}).length)
+  boardsSeen.set(seenKey(cwd, 'file'), Object.keys(parsed.tasks ?? {}).length)
   return parsed
+}
+
+/**
+ * The per-card layout: one JSON file per task plus `meta.json`.
+ *
+ * `actors` is deliberately NOT stored. It is evidence, re-derived from the
+ * cards on every load (activity from log/comments, mere naming from
+ * assignee/creator/reviewer/waiting_on). A persisted roster would change the
+ * shared meta file on EVERY action — which is exactly the single hotspot this
+ * layout exists to remove.
+ */
+async function loadTasksBoard(cwd: string): Promise<Board> {
+  const dirRead = await readTaskDir(cwd)
+  if (dirRead.missing) {
+    // Same split as the single-file loader: reads may show the fresh truth (so
+    // the panel can offer to re-enable), writes over a vanished board refuse.
+    const seen = boardsSeen.get(seenKey(cwd, 'tasks')) ?? 0
+    const empty = emptyBoard(resolve(cwd))
+    if (seen > 0) vanishedBoards.set(empty, seen)
+    return empty
+  }
+
+  const tasks: Record<string, Task> = {}
+  for (const [id, raw] of dirRead.cards) {
+    let task: Task
+    try {
+      task = JSON.parse(raw) as Task
+    } catch {
+      throw new StoreError('internal', `task file ${id}.json is not valid JSON; fix or remove that one file`)
+    }
+    if (!task || typeof task !== 'object' || Array.isArray(task)) {
+      throw new StoreError('internal', `task file ${id}.json does not hold a task object`)
+    }
+    // The file name is the address; a drifting `id` is healed back to it.
+    task.id = id
+    if (!Array.isArray(task.comments)) task.comments = []
+    if (!Array.isArray(task.log)) task.log = []
+    if (!Array.isArray(task.tags)) task.tags = []
+    if (task.value === undefined) task.value = null
+    if ((task.status as string) === 'cancelled') task.status = 'closed'
+    if (task.reviewer === undefined) task.reviewer = null
+    if (task.waiting_on === undefined) task.waiting_on = null
+    for (const entry of task.log) {
+      if ((entry.event as string) === 'cancelled') entry.event = 'closed'
+    }
+    tasks[id] = task
+  }
+
+  let meta: { version?: unknown; tails?: Board['tails'] } = {}
+  if (dirRead.meta !== null) {
+    try {
+      meta = JSON.parse(dirRead.meta) as typeof meta
+    } catch {
+      throw new StoreError('internal', 'taskboard meta.json is not valid JSON; fix or remove it (the cards are intact)')
+    }
+  }
+  if (meta.version !== undefined && meta.version !== 1) {
+    throw new StoreError('internal', 'unsupported taskboard meta version (expected 1)')
+  }
+
+  const board: Board = {
+    version: 1,
+    workspace: resolve(cwd),
+    next_seq: 1,
+    tasks,
+    actors: {},
+    tails: meta.tails ?? {},
+  }
+  deriveActors(board)
+  boardsSeen.set(seenKey(cwd, 'tasks'), Object.keys(tasks).length)
+  rememberSnapshot(board, {
+    cards: dirRead.cards,
+    files: dirRead.files,
+    meta: dirRead.meta,
+    seen: Object.keys(tasks).length,
+  })
+  return board
+}
+
+/**
+ * Rebuild the roster from the cards. Two kinds of evidence, kept distinct:
+ *   - activity — a log entry or comment by that name: `last_seen_at` = newest;
+ *   - reference — named as creator/assignee/reviewer/waiting target:
+ *     `last_seen_at` stays null, because being named is not being alive.
+ * Aliases come from the environment, not from history, so nothing is lost.
+ */
+function deriveActors(board: Board): void {
+  const activity = new Map<string, { name: string; at: string }>()
+  const reference = new Map<string, { name: string; at: string }>()
+  const remember = (
+    into: Map<string, { name: string; at: string }>,
+    name: unknown,
+    at: unknown,
+  ): void => {
+    if (typeof name !== 'string' || name.trim() === '' || typeof at !== 'string' || at === '') return
+    const key = actorKey(name)
+    if (!key) return
+    const known = into.get(key)
+    if (!known || at > known.at) into.set(key, { name: name.trim(), at })
+  }
+  for (const task of Object.values(board.tasks)) {
+    for (const entry of task.log ?? []) remember(activity, entry?.by, entry?.at)
+    for (const comment of task.comments ?? []) remember(activity, comment?.by, comment?.at)
+    const at = typeof task.created_at === 'string' && task.created_at ? task.created_at : new Date().toISOString()
+    remember(reference, task.created_by, at)
+    remember(reference, task.assignee, at)
+    remember(reference, task.reviewer, at)
+    remember(reference, task.waiting_on?.who, at)
+  }
+  for (const [, { name, at }] of activity) {
+    board.actors[name] = { kind: kindOf(name), aliases: [], first_seen_at: at, last_seen_at: at }
+  }
+  for (const [key, { name, at }] of reference) {
+    const already = Object.keys(board.actors).some((known) => actorKey(known) === key)
+    if (already) continue
+    board.actors[name] = { kind: kindOf(name), aliases: [], first_seen_at: at, last_seen_at: null }
+  }
 }
 
 let tempCounter = 0
 
 export async function saveBoard(cwd: string, board: Board): Promise<void> {
+  // The one case where a read is allowed but a write is not: the board's
+  // artifacts disappeared while this process had seen tasks in them. Saving
+  // this empty snapshot would replace N cards with whatever the caller just
+  // created — the exact silent loss the guard exists for. `enableBoard` writes
+  // directly, so deliberately turning the board on again still works.
+  const vanished = vanishedBoards.get(board)
+  if (vanished !== undefined) {
+    throw new StoreError(
+      'internal',
+      `the board disappeared while this process was running (it held ${vanished} task(s) a moment ago); `
+      + 'refusing to save over it — restore .dsh/taskboard.json or .dsh/taskboard/, '
+      + 'or turn the board on again for this workspace to start a fresh one',
+    )
+  }
+  if ((await resolveStorageMode(cwd)) === 'tasks') {
+    // Only the cards whose bytes changed are written; an ordinary action (claim,
+    // start, comment) touches exactly one file, which is what makes two branches
+    // that worked on different cards merge cleanly.
+    const snapshot: CardSnapshot = snapshotOf(board)
+      ?? { cards: new Map(), files: new Map(), meta: null, seen: 0 }
+    await saveTaskDir(cwd, board, snapshot)
+    rememberSnapshot(board, snapshot)
+    return
+  }
   const file = boardFilePath(cwd)
   await mkdir(dirname(file), { recursive: true })
   // Write-then-rename: a crash mid-write must not leave a truncated board.
@@ -244,12 +441,17 @@ export interface EnableResult {
  * Turn the board on for a workspace.
  *
  * "On" means two things, and both matter:
- *   1. `.dsh/taskboard.json` exists, so the panel shows a real (possibly
- *      empty) board instead of the first-run prompt;
+ *   1. the board exists — `.dsh/taskboard.json` (single ledger) or
+ *      `.dsh/taskboard/` (one file per card) — so the panel shows a real
+ *      (possibly empty) board instead of the first-run prompt;
  *   2. `.dsh/BOARD-PROTOCOL.md` exists, so an agent that has never seen this
  *      board has the local rules in the project itself — the plugin's system
  *      prompt covers the flow, but the project doc is what a human or a
  *      different harness can read without the plugin.
+ *
+ * `options.layout` picks the layout for a workspace that has no board yet (the
+ * enable wizard asks). It is ignored for an existing board: enabling may create
+ * a board, never convert one — that is `migrateBoardLayout`.
  *
  * Idempotent and non-destructive: an existing board is NEVER rewritten (its
  * tasks are the user's data), and an existing protocol doc is left as-is so a
@@ -257,25 +459,35 @@ export interface EnableResult {
  */
 export async function enableBoard(
   cwd: string,
-  options: { seedProtocol?: boolean } = {},
+  options: { seedProtocol?: boolean; layout?: StorageMode } = {},
 ): Promise<EnableResult> {
-  const boardFile = boardFilePath(cwd)
+  const hasFile = await fileExists(boardFilePath(cwd))
+  const hasDir = await fileExists(boardDirPath(cwd))
+  const mode: StorageMode = hasDir ? 'tasks' : hasFile ? 'file' : (options.layout ?? await resolveStorageMode(cwd))
+  const boardFile = mode === 'file' ? boardFilePath(cwd) : boardDirPath(cwd)
   const protocolFile = join(cwd, '.dsh', 'BOARD-PROTOCOL.md')
-  const alreadyExisted = await fileExists(boardFile)
+  const alreadyExisted = hasFile || hasDir
 
   // Creating a board is a write, so it goes through the lock like any other.
+  // The artifact is written directly (not through saveBoard) because saveBoard
+  // re-resolves the layout, and for a brand-new workspace it would only see the
+  // preference — not the layout this call was asked to create.
   if (!alreadyExisted) {
     await withBoardLock(cwd, async () => {
-      // Re-check under the lock: another writer may have won the race.
       if (await fileExists(boardFile)) return
-      await saveBoard(cwd, emptyBoard(resolve(cwd)))
+      const empty = emptyBoard(resolve(cwd))
+      if (mode === 'file') {
+        await atomicWrite(boardFilePath(cwd), `${JSON.stringify(empty, null, 2)}\n`)
+      } else {
+        await saveTaskDir(cwd, empty, { cards: new Map(), files: new Map(), meta: null, seen: 0 })
+      }
     })
   }
 
   let protocolWritten: string | null = null
   if (options.seedProtocol !== false && !(await fileExists(protocolFile))) {
     await mkdir(dirname(protocolFile), { recursive: true })
-    await writeFile(protocolFile, protocolDoc(), { mode: 0o600 })
+    await writeFile(protocolFile, boardProtocolDoc(), { mode: 0o600 })
     protocolWritten = protocolFile
   }
 
@@ -296,25 +508,96 @@ async function fileExists(path: string): Promise<boolean> {
 }
 
 /**
- * The workspace protocol doc seeded by `enableBoard`.
+ * Move one board between layouts. The old artifact is never deleted: it is
+ * renamed in place (`taskboard.json.pre-tasks` / `taskboard.pre-file/`) so a
+ * bad migration is one `git checkout`/rename away from being undone.
+ *
+ * Runs under the same workspace lock as every other write, because a migration
+ * racing an ordinary mutation is the one way to lose a card.
+ */
+export interface MigrateResult {
+  from: 'file' | 'tasks' | 'none'
+  to: StorageMode
+  tasks: number
+  /** Where the previous artifact was kept, or null when there was nothing to keep. */
+  backup: string | null
+}
+
+export async function migrateBoardLayout(cwd: string, target: StorageMode): Promise<MigrateResult> {
+  return withBoardLock(cwd, async () => {
+    const hasFile = await fileExists(boardFilePath(cwd))
+    const hasDir = await fileExists(boardDirPath(cwd))
+
+    if (target === 'tasks') {
+      if (hasDir) return { from: 'tasks', to: 'tasks', tasks: 0, backup: null }
+      if (!hasFile) {
+        await saveTaskDir(cwd, emptyBoard(resolve(cwd)), { cards: new Map(), files: new Map(), meta: null, seen: 0 })
+        return { from: 'none', to: 'tasks', tasks: 0, backup: null }
+      }
+      const board = await loadFileBoard(cwd)
+      foldLegacyNotices(board)
+      await saveTaskDir(cwd, board, { cards: new Map(), files: new Map(), meta: null, seen: 0 })
+      const backup = `${boardFilePath(cwd)}.pre-tasks`
+      await rename(boardFilePath(cwd), backup)
+      return { from: 'file', to: 'tasks', tasks: Object.keys(board.tasks).length, backup }
+    }
+
+    if (hasFile) return { from: 'file', to: 'file', tasks: 0, backup: null }
+    if (!hasDir) {
+      await atomicWrite(boardFilePath(cwd), `${JSON.stringify(emptyBoard(resolve(cwd)), null, 2)}\n`)
+      return { from: 'none', to: 'file', tasks: 0, backup: null }
+    }
+    const board = await loadTasksBoard(cwd)
+    await atomicWrite(boardFilePath(cwd), `${JSON.stringify(board, null, 2)}\n`)
+    const backup = join(cwd, '.dsh', 'taskboard.pre-file')
+    await rm(backup, { recursive: true, force: true })
+    await rename(boardDirPath(cwd), backup)
+    return { from: 'tasks', to: 'file', tasks: Object.keys(board.tasks).length, backup }
+  })
+}
+
+/** Move the pre-v0.9.5 board-level notice records onto the cards they describe. */
+function foldLegacyNotices(board: Board): void {
+  const legacy = board.review_notices
+  if (!legacy) return
+  for (const [key, record] of Object.entries(legacy)) {
+    const task = record?.task ? board.tasks[record.task] : undefined
+    if (!task) continue
+    const notices = (task.notices ??= {})
+    if (!notices[key]) notices[key] = record
+    delete legacy[key]
+  }
+  if (Object.keys(legacy).length === 0) delete board.review_notices
+}
+
+/**
+ * The workspace protocol doc seed (also printed by `taskboard protocol`).
  *
  * Deliberately short: it points at the plugin's full spec instead of copying
  * it, because a copy would go stale the moment the plugin ships a change. What
  * it DOES state is the part an agent cannot infer — above all that only
  * `closed` is terminal, so `done` still owes a settle.
  */
-function protocolDoc(): string {
+export function boardProtocolDoc(): string {
   return `# 本工作区的任务看板约定
 
 > 本文件由 dsh-taskboard-kit 在「开启看板」时生成，之后**归本工作区所有** —— 可以自由编辑、扩充、
-> 甚至删除；插件不会覆盖它。完整规范见插件自带文档（\`dsh-taskboard-kit/docs/COLLABORATION.md\`），
-> 这里只写本板不可不知的几条。
+> 甚至删除；插件不会覆盖它（要按最新模板重写：\`taskboard protocol --write\`）。
+> 完整规范见插件自带文档（\`dsh-taskboard-kit/docs/COLLABORATION.md\`），这里只写本板不可不知的几条。
 
 ## 唯一事实源
 
-看板就是一个文件：\`.dsh/taskboard.json\`（本目录下）。**永远不要手改它** ——
+看板数据在 \`.dsh/\` 下，两种布局之一：
+
+- 单文件：\`.dsh/taskboard.json\`
+- 每卡一文件：\`.dsh/taskboard/T-7K2M.json\`（一张卡一个文件）+ \`.dsh/taskboard/meta.json\`
+
+\`taskboard path\` 告诉你本工作区当前用哪种。**永远不要手改这些文件** ——
 锁、原子认领、状态机都在工具里，手改会绕过全部保护。用 \`taskboard_*\` 工具，
 或没有插件时的 \`dsh-taskboard-kit/bin/taskboard.mjs\` CLI。
+
+（每卡布局的卡号是随机的 \`T-7K2M\`，不递增；旧卡号 \`T-42\` 原样保留。把板提交进 git 时，
+不同卡的各自动作不会互相冲突，同一张卡被两处改动才会。）
 
 ## 状态机：只有 closed 是终点
 
@@ -407,7 +690,10 @@ async function lockHolderPid(lockPath: string): Promise<number | undefined> {
 }
 
 async function acquireBoardLock(cwd: string): Promise<() => Promise<void>> {
-  const lockPath = `${boardFilePath(cwd)}.lock`
+  // One lock per workspace, shared by both layouts: switching layouts is a
+  // migration, and a migration racing an ordinary write is the one race that
+  // could lose a card.
+  const lockPath = lockFilePath(cwd)
   await mkdir(dirname(lockPath), { recursive: true })
   for (let attempt = 0; ; attempt += 1) {
     const token = randomUUID()
@@ -495,8 +781,8 @@ const MAX_TEXT_LENGTH = 50_000
 const MAX_TAG_LENGTH = 100
 const MAX_TAGS = 50
 
-/** `T-<n>` — the only shape that may ever reach a lookup. */
-const TASK_ID = /^T-\d+$/
+/** `T-<n>` (legacy sequential) or `T-7K2M` (per-card random) — the only shapes that may reach a lookup. */
+const TASK_ID = TASK_ID_PATTERN
 
 function requireId(id: unknown): string {
   const value = typeof id === 'string' ? id.trim() : ''
@@ -620,6 +906,56 @@ export function actorAliasGroups(): Record<string, string[]> {
   const watch = parseWatchNames(process.env.TASKBOARD_WATCH_NAMES)
   if (watch) add(watch.canonical, watch.aliases)
   return groups
+}
+
+/**
+ * `别名 → 规范名` 的折叠表（键是 `actorKey`）。声明是**传递**的：`A≡B`、`B≡C`
+ * ⇒ 三者同键，与 `principalGroups()` 的口径一致。
+ *
+ * 只在**读侧**用（见 `declaredSameActor`）：写侧已有 `touchActor` 落别名，权限闸门
+ * 已有 `principalGroups`，唯独 inbox 一直只认名册，于是"卡上写 dsh、会话身份
+ * dsh-agent"在自己清单里查无此人。
+ */
+function aliasFoldTable(groups: Record<string, string[]> = actorAliasGroups()): Map<string, string> {
+  const table = new Map<string, string>()
+  for (const [canonical, aliases] of Object.entries(groups)) {
+    const key = actorKey(canonical)
+    if (!key) continue
+    table.set(key, key)
+    for (const alias of aliases) {
+      const aliasKey = actorKey(alias)
+      if (aliasKey) table.set(aliasKey, key)
+    }
+  }
+  // 声明可以链起来（配置里常把别名组与 watch names 分两处写），所以把每个目标
+  // 沿表追到不动点；追到自身即终点。
+  for (const key of [...table.keys()]) {
+    let target = table.get(key)!
+    const seen = new Set([key])
+    while (table.get(target) !== target && !seen.has(target)) {
+      seen.add(target)
+      target = table.get(target) ?? target
+    }
+    table.set(key, target)
+  }
+  return table
+}
+
+/**
+ * 「是不是同一个 Actor」的读侧版本：明说的等价名（内置 `dsh ≡ dsh-agent`、
+ * `TASKBOARD_ACTOR_ALIASES`、`TASKBOARD_WATCH_NAMES`）也算同一个人。
+ *
+ * 为什么读侧非要有这一层：名册条目里的 `aliases` 通常**是空的** —— 每卡布局不落盘
+ * `actors`（ADR 0001），加载时由日志派生的条目一律 `aliases: []`（见 roster backfill），
+ * 于是 `touchActor` 落下的别名活不过一次 reload。权限闸门早就补过同一层，注释说得
+ * 很清楚：「没有第 2 层，dsh 自己的会话会被自己拒」。同一句话对 inbox 成立：没有它，
+ * dsh 自己的卡不进自己的清单（T-1 实训：卡上写 `dsh`、会话默认身份 `dsh-agent`，
+ * `taskboard_inbox` 报"看板干净"）。
+ */
+function declaredSameActor(a: string | null | undefined, b: string | null | undefined, table: Map<string, string>): boolean {
+  if (!a || !b) return false
+  const fold = (name: string) => table.get(actorKey(name)) ?? actorKey(name)
+  return fold(a) === fold(b)
 }
 
 /** Names that are humans, not agents: `human` plus `TASKBOARD_HUMANS` (逗号分隔). */
@@ -979,16 +1315,28 @@ export async function createTask(cwd: string, input: CreateTaskInput, by: string
   const tags = parseTags(input?.tags) ?? []
   return withBoardLock(cwd, async () => {
     const board = await loadBoard(cwd)
+    const mode = await resolveStorageMode(cwd)
     const now = new Date().toISOString()
     // Never allocate an id that already exists: `board.tasks[id] = task` would
     // overwrite that task in place, silently. loadBoard heals next_seq, this is
     // the belt to that pair of braces.
-    let id = `T-${board.next_seq}`
-    while (Object.hasOwn(board.tasks, id)) {
-      board.next_seq += 1
+    //
+    // The per-card layout allocates a random id instead of a sequence: a shared
+    // counter is exactly what makes two clones mint the same `T-2` and collide
+    // on merge. A random 4-char id has ~923k values, and a collision inside one
+    // board is checked (and retried) below.
+    let id: string
+    if (mode === 'tasks') {
+      id = randomTaskId()
+      while (Object.hasOwn(board.tasks, id)) id = randomTaskId()
+    } else {
       id = `T-${board.next_seq}`
+      while (Object.hasOwn(board.tasks, id)) {
+        board.next_seq += 1
+        id = `T-${board.next_seq}`
+      }
+      board.next_seq += 1
     }
-    board.next_seq += 1
     const log: TaskLogEntry[] = [logEntry(now, by, 'created')]
     if (assignee) log.push(logEntry(now, by, 'assigned'))
     const task: Task = {
@@ -1450,7 +1798,13 @@ export async function listTasks(cwd: string, filter?: ListTasksFilter): Promise<
  */
 export async function inbox(cwd: string, actor: string, options?: InboxOptions): Promise<InboxItem[]> {
   const board = await loadBoard(cwd)
-  return inboxFor(board, actor, options)
+  // 名册优先（它是板上的事实），声明出来的等价名兜底（名册里通常没有别名）。
+  // 折叠表按调用建一次，别在每张卡、每个字段上重建。
+  const table = aliasFoldTable()
+  return inboxFor(board, actor, {
+    ...options,
+    sameActor: (a, b) => sameActor(board, a, b) || declaredSameActor(a, b, table),
+  })
 }
 
 /** 全板协作健康度：交接断了 / 审核没人认领 / 在等人类 / 列陈旧。 */

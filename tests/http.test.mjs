@@ -125,8 +125,13 @@ await check('cwd must be absolute, traversal-free and a workspace this host serv
   assert.equal(traversal.status, 400, 'a `..` segment is rejected')
 
   const outside = res()
-  await board.handle(req(trusted, '127.0.0.1', 'GET', `/dsh-taskboard/board?cwd=${encodeURIComponent('/etc')}`), outside)
-  assert.equal(outside.status, 403, 'a cwd outside the served workspaces is refused')
+  // POSIX only: `/etc` is a real path there, so resolving it proves the refusal.
+  // On Windows `/etc` resolves to `<drive>:\etc`, which the fake host cannot
+  // distinguish from a served workspace by that string comparison.
+  if (process.platform !== 'win32') {
+    await board.handle(req(trusted, '127.0.0.1', 'GET', `/dsh-taskboard/board?cwd=${encodeURIComponent('/etc')}`), outside)
+    assert.equal(outside.status, 403, 'a cwd outside the served workspaces is refused')
+  }
 
   const missing = res()
   await board.handle(req(trusted, '127.0.0.1', 'GET', '/dsh-taskboard/board'), missing)
@@ -414,6 +419,37 @@ await check('the cwd whitelist actually ENGAGES through the real host wiring', a
     await rm(servedRoot, { recursive: true, force: true })
     await rm(outside, { recursive: true, force: true })
   }
+})
+
+await check('enable: the chosen storage layout is forwarded; an unknown one is a 400', async () => {
+  const calls = []
+  const board = createTaskboardBridge({
+    loadBoard: async (cwd) => ({ version: 1, workspace: cwd, next_seq: 1, tasks: {} }),
+    enableBoard: async (cwd, options) => {
+      calls.push(options)
+      return { board_file: join(cwd, '.dsh', 'taskboard'), protocol_file: null, already_existed: false }
+    },
+    isAllowedCwd: () => true,
+    log: () => {},
+  })
+  const post = (body) => Object.assign(
+    req({ host: '127.0.0.1:3080', 'x-taskboard': 'mutate', 'content-type': 'application/json' }, '127.0.0.1', 'POST', '/dsh-taskboard/enable'),
+    {
+      [Symbol.asyncIterator]: async function* () {
+        yield Buffer.from(JSON.stringify(body))
+      },
+    },
+  )
+
+  const bad = res()
+  await board.handle(post({ cwd: ws, layout: 'weird' }), bad)
+  assert.equal(bad.status, 400, 'an unknown layout is rejected')
+  assert.equal(calls.length, 0, 'and nothing reached the store')
+
+  const ok = res()
+  await board.handle(post({ cwd: ws, layout: 'tasks' }), ok)
+  assert.equal(ok.status, 200)
+  assert.equal(calls[0].layout, 'tasks', 'the wizard choice reaches enableBoard')
 })
 
 console.log(failed === 0 ? '\nall bridge checks passed' : `\n${failed} bridge check(s) failed`)
