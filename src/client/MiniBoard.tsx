@@ -25,6 +25,11 @@
  * a row click stacks the shared DetailDrawer as layer 2. ESC and the backdrop
  * unwind one layer at a time: picker → detail → drawer.
  *
+ * A session-row open (`store.miniDetailOnly`) shows the card detail ALONE over
+ * the dimmer — no board behind it, and closing that detail (×, ESC, click
+ * outside) closes the whole drawer instead of revealing a board nobody asked
+ * for.
+ *
  * Selection is deliberately split: the mini drawer's open task is
  * component-local state (unmounted with the drawer, so closing leaves no
  * residue), while the board tab owns `store.selectedId` — a shared selection
@@ -181,7 +186,8 @@ export function MiniBoardDrawer(props: MiniBoardProps): JSX.Element | null {
   )
 }
 
-function MiniBoardDrawerContent({ store, state, initialSelectedId, initialTab }: { store: TaskboardStore; state: TaskboardState; initialSelectedId?: string; initialTab?: 'detail' | 'comments' | 'activity' }): JSX.Element {  const [dragId, setDragId] = useState<string | null>(null)
+function MiniBoardDrawerContent({ store, state, initialSelectedId, initialTab }: { store: TaskboardStore; state: TaskboardState; initialSelectedId?: string; initialTab?: 'detail' | 'comments' | 'activity' }): JSX.Element {
+  const [dragId, setDragId] = useState<string | null>(null)
   const [overColumn, setOverColumn] = useState<BoardColumn | null>(null)
   const [pickerId, setPickerId] = useState<string | null>(null)
   const [closedOpen, setClosedOpen] = useState(false)
@@ -190,6 +196,12 @@ function MiniBoardDrawerContent({ store, state, initialSelectedId, initialTab }:
   // A session-row link may have asked for one card; consume it on mount so a
   // later manual pick (or the next open) is never overridden.
   const [selectedId, setSelectedId] = useState<string | null>(() => initialSelectedId ?? store.takeMiniRequest())
+  // A session-row open carries no board behind the detail, and that must hold
+  // for the whole lifetime of THIS drawer: captured once on mount, so closing
+  // the detail (X, ESC, click-outside) can never fall back to a board the user
+  // never asked for. A later ordinary open mounts a fresh drawer (miniDetailOnly
+  // is already cleared by setMiniOpen(false)).
+  const [detailOnly] = useState(() => state.miniDetailOnly)
   const backdropRef = useRef<HTMLDivElement>(null)
 
   const board = state.board
@@ -233,9 +245,17 @@ function MiniBoardDrawerContent({ store, state, initialSelectedId, initialTab }:
     return () => observer.disconnect()
   }, [])
 
+  // Closing the detail: detail-only has no board to fall back to, so the whole
+  // drawer goes with it (same as the × button — one behavior, three gestures:
+  // ESC, click-outside, ×).
+  const closeDetail = (): void => {
+    setSelectedId(null)
+    if (detailOnly) store.setMiniOpen(false)
+  }
+
   const unwind = (): void => {
     if (pickerId) setPickerId(null)
-    else if (selected) setSelectedId(null)
+    else if (selected) closeDetail()
     else store.setMiniOpen(false)
   }
 
@@ -276,7 +296,7 @@ function MiniBoardDrawerContent({ store, state, initialSelectedId, initialTab }:
       {/* Click catcher below both drawer layers (no stopPropagation games). */}
       <div style={styles.catcher} onClick={unwind} />
       {/* Session-row entry opens the card alone: the board stays out of the way. */}
-      <aside style={state.miniDetailOnly && selected ? { ...styles.drawer, display: 'none' } : styles.drawer}>
+      <aside style={detailOnly ? { ...styles.drawer, display: 'none' } : styles.drawer}>
         <div style={styles.drawerHead}>
           <span style={styles.drawerTitle}>{L('看板', 'Board')}</span>
           <span style={styles.drawerCount}>{L('{n} 个进行中', '{n} open', { n: openTaskCount(board) })}</span>
@@ -355,11 +375,7 @@ function MiniBoardDrawerContent({ store, state, initialSelectedId, initialTab }:
           state={state}
           store={store}
           actors={actors}
-          onClose={() => {
-            setSelectedId(null)
-            // Detail-only has no board to fall back to, so closing it closes the drawer.
-            if (state.miniDetailOnly) store.setMiniOpen(false)
-          }}
+          onClose={closeDetail}
           onOpenTask={(id) => setSelectedId(id)}
           style={styles.detailOverlay}
           {...(initialTab ? { initialTab } : {})}

@@ -191,12 +191,14 @@ export function apply(raw: Context): void {
   // Session-row menu entry: the row title may carry `#ZGT4 …` (the host writes
   // it when the session creates/claims/starts a card), so offer the jump there.
   // The menu seat hands the entry the row's `displayTitle`, which is exactly
-  // the string the number lives in.
+  // the string the number lives in. Order 50 puts it FIRST: the shipped rows
+  // are pin 100 / rename 200 / fork 300 / archive 400 / session-id 450, and a
+  // smaller order renders earlier (2026-11-03: 460 landed it dead last).
   ctx.slots.inject('sidebar.workspaces.session.menu.item', () => ctx.slots.register(
     {
       name: 'sidebar.workspaces.session.menu.item',
       id: MINI_MENU_ITEM_ID,
-      order: 460,
+      order: 50,
       label: () => L('看板', 'Board'),
       inject: () => ({ store }),
     },
