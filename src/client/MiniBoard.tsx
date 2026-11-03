@@ -187,7 +187,9 @@ function MiniBoardDrawerContent({ store, state, initialSelectedId, initialTab }:
   const [closedOpen, setClosedOpen] = useState(false)
   // The mini drawer's open task is LOCAL — the board tab owns store.selectedId
   // (the shared-store selection rendered both drawers on top of each other).
-  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId ?? null)
+  // A session-row link may have asked for one card; consume it on mount so a
+  // later manual pick (or the next open) is never overridden.
+  const [selectedId, setSelectedId] = useState<string | null>(() => initialSelectedId ?? store.takeMiniRequest())
   const backdropRef = useRef<HTMLDivElement>(null)
 
   const board = state.board
