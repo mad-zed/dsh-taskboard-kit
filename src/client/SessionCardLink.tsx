@@ -12,6 +12,7 @@
  * @module dsh-taskboard-kit/client-session-link
  */
 
+import { useState } from 'react'
 import { L } from './locale.ts'
 import { getTaskboardStore, type TaskboardStore } from './store.ts'
 
@@ -38,6 +39,9 @@ export function cardIdFromTitle(title: unknown): string | undefined {
 /** The「⋯」entry; renders nothing while the row title carries no card number. */
 export function SessionCardMenuItem(props: SessionCardMenuItemProps): JSX.Element | null {
   const store = props.store ?? getTaskboardStore()
+  // Hover is inline state on purpose: the sidebar menu paints its own rows, and
+  // a stylesheet-only :hover loses to the shipped rules.
+  const [hover, setHover] = useState(false)
   const cardId = cardIdFromTitle(props.displayTitle)
   const useMenuOpenState = props.useMenuOpenState
   if (!cardId) return null
@@ -46,7 +50,12 @@ export function SessionCardMenuItem(props: SessionCardMenuItemProps): JSX.Elemen
       type="button"
       role="menuitem"
       className="tb-rowmenu-item"
-      onClick={() => {
+      style={{
+        color: 'var(--dsw-alias-label-secondary)',
+        background: hover ? 'var(--dsw-alias-interactive-bg-hover)' : 'transparent',
+      }}
+      onMouseEnter={() => setHover(true)}
+      onMouseLeave={() => setHover(false)}      onClick={() => {
         // Dismiss the menu first: the drawer opens over the frame, and a stale
         // open menu would swallow the next click.
         if (typeof useMenuOpenState === 'function') {

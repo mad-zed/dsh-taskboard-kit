@@ -136,10 +136,11 @@ export const TB_CSS = `
 /* Session-row「⋯」menu entry: matches the shipped rows (13px, 16px icon slot)
    and must not widen the menu — width:100% plus padding without border-box is
    what produced a horizontal scrollbar. */
-.tb-rowmenu-item { display: flex; align-items: center; gap: 8px; box-sizing: border-box; width: 100%; border: none; border-radius: 6px; background: transparent; color: $" + "{FG}" + "; padding: 6px 8px; font-family: inherit; font-size: 13px; line-height: 20px; text-align: left; cursor: pointer; }
-.tb-rowmenu-item:hover { background: $" + "{HOVER_BG}" + "; }
+.tb-rowmenu-item { display: flex; align-items: center; gap: 8px; box-sizing: border-box; width: 100%; border: none; border-radius: 6px; background: transparent; color: var(--dsw-alias-label-secondary); padding: 6px 8px; font-family: inherit; font-size: 13px; line-height: 20px; text-align: left; cursor: pointer; }
+.tb-rowmenu-item:hover { background: var(--dsw-alias-interactive-bg-hover); }
 .tb-rowmenu-item svg { flex: none; }
-.tb-rowmenu-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }.tb-input, .tb-textarea { width: 100%; box-sizing: border-box; border: 1px solid ${BORDER_STRONG}; border-radius: 8px; background: ${BG}; color: inherit; padding: 6px 9px; font-size: 12.5px; font-family: inherit; line-height: 1.5; }
+.tb-rowmenu-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tb-input, .tb-textarea { width: 100%; box-sizing: border-box; border: 1px solid ${BORDER_STRONG}; border-radius: 8px; background: ${BG}; color: inherit; padding: 6px 9px; font-size: 12.5px; font-family: inherit; line-height: 1.5; }
 .tb-input::placeholder, .tb-textarea::placeholder { color: ${DIM}; opacity: 0.7; }
 .tb-input:focus, .tb-textarea:focus { outline: none; border-color: ${LINK}; box-shadow: 0 0 0 3px ${FOCUS_HALO}; }
 .tb-textarea { resize: vertical; }
