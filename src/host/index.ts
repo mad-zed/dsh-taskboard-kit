@@ -64,7 +64,16 @@ export {
   updateTask,
   withBoardLock,
 } from './store.ts'
-export { resolveCwd } from './workspace.ts'
+export { resolveCwd, resolveSession, sessionIdOf, type ExecLike } from './workspace.ts'
+export { syncSessionTitle } from './title.ts'
+export {
+  cardPrefix,
+  MAX_TITLE_BYTES,
+  shouldWriteTitle,
+  truncateUtf8,
+  wantedSessionTitle,
+  type TitleCard,
+} from './title-rules.ts'
 export { L } from './locale.ts'
 export { noticePayload, notifyHuman, notifyHookExample, msg9HookExample, type HumanNotice, type NotifyResult } from './notify.ts'
 export {

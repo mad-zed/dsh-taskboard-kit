@@ -38,6 +38,7 @@ import {
   updateTask,
 } from './store.ts'
 import { resolveCwd } from './workspace.ts'
+import { syncSessionTitle } from './title.ts'
 
 const TEXT_OUTPUT = {
   schema: { type: 'string' as const },
@@ -357,6 +358,9 @@ export function registerTaskboardTools(ctx: Context): void {
           ...(args.value !== undefined ? { value: args.value } : {}),
           ...(args.tags !== undefined ? { tags: args.tags } : {}),
         }, actorOf(args.by))
+        // Bind the session to the card it just created: the sidebar row becomes
+        // `#ZGT4 卡片标题` so the workspace shows what this conversation is doing.
+        syncSessionTitle(ctx, exec, task)
         const placement = task.assignee
           ? L('已指派给 {who}', 'assigned to {who}', { who: task.assignee })
           : L('在待认领池里，可用 taskboard_claim 认领', 'in the claimable pool — claim it with taskboard_claim')
@@ -388,6 +392,7 @@ export function registerTaskboardTools(ctx: Context): void {
       const actor = actorOf(args.by)
       try {
         const task = await claimTask(cwd, args.id, actor)
+        syncSessionTitle(ctx, exec, task)
         return L(
           '已认领 {id}（in_progress · {by}）：{title}\n干完用 taskboard_update（action=submit --reviewer <审核人>）交审核；中途卡住了用 action=block 说明在等谁。',
           'Claimed {id} (in_progress · {by}): {title}\nWhen done, hand it off with taskboard_update (action=submit --reviewer <name>); if you get stuck, action=block and say who you are waiting on.',
@@ -476,6 +481,9 @@ export function registerTaskboardTools(ctx: Context): void {
           ...(args.tags !== undefined ? { tags: args.tags } : {}),
           ...(args.note !== undefined ? { note: args.note } : {}),
         }, actor)
+        // Same binding on start / rename: `start` links the session to the card,
+        // and a title edit refreshes the text behind an existing `#XXXX ` prefix.
+        syncSessionTitle(ctx, exec, task)
         const extra: string[] = []
         if (args.action === 'submit' && task.reviewer) {
           extra.push(L(

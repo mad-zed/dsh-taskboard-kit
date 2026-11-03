@@ -23,13 +23,30 @@ export interface ExecLike {
  * The session id behind `exec.agent`: a plain string in test doubles, an
  * object with a string `id` (dsh's Agent) in a live host.
  */
-function sessionIdOf(agent: unknown): string | undefined {
+export function sessionIdOf(agent: unknown): string | undefined {
   if (typeof agent === 'string' && agent !== '') return agent
   if (agent && typeof agent === 'object') {
     const id = (agent as { id?: unknown }).id
     if (typeof id === 'string' && id !== '') return id
   }
   return undefined
+}
+
+/**
+ * The live Session behind `exec.agent`, when the host can say. The session
+ * object is what the session-title service renames; an unknown agent or a
+ * disposed session yields `undefined` and the caller stays quiet.
+ */
+export function resolveSession(ctx: unknown, exec?: ExecLike): unknown | undefined {
+  const sessionId = sessionIdOf(exec?.agent)
+  if (!sessionId) return undefined
+  try {
+    const sessions = (ctx as { sessions?: { get(id: string): unknown } }).sessions
+    return sessions?.get(sessionId) ?? undefined
+  } catch {
+    /* in cordis, reading an un-provided service throws: treat as unknown */
+    return undefined
+  }
 }
 
 /**
