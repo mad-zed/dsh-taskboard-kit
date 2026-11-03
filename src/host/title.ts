@@ -15,7 +15,7 @@ import { cardPrefix, shouldWriteTitle, wantedSessionTitle, type TitleCard } from
 
 /** The `ctx.get('sessionTitle')` slice we read. */
 interface TitlesLike {
-  get(session: unknown): { title?: unknown } | undefined
+  get(session: unknown): { title?: unknown; source?: { kind?: unknown } } | undefined
   rename(session: unknown, title: string): unknown
 }
 
@@ -49,9 +49,13 @@ export function syncSessionTitle(ctx: unknown, exec: ExecLike | undefined, card:
     if (!session) return undefined
     const titles = readTitles(ctx)
     if (!titles) return undefined
-    const latest = titles.get(session)?.title
+    const snapshot = titles.get(session)
+    const latest = snapshot?.title
+    const sourceKind = snapshot?.source?.kind
     const current = typeof latest === 'string' ? latest : null
-    if (!shouldWriteTitle(current, cardPrefix(card.id))) return undefined
+    // Only a HUMAN title is sacred; a generated one may be replaced (see title-rules).
+    const source = typeof sourceKind === 'string' ? sourceKind : undefined
+    if (!shouldWriteTitle(current, cardPrefix(card.id), source)) return undefined
     const wanted = wantedSessionTitle(card)
     if (current === wanted) return undefined
     titles.rename(session, wanted)

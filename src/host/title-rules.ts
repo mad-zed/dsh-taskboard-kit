@@ -18,6 +18,9 @@ export interface TitleCard {
 /** Byte budget for a written title: `#XXXX ` plus a readable card title. */
 export const MAX_TITLE_BYTES = 120
 
+/** A title that starts with some card's `#XXXX ` prefix (ours or another card's). */
+const CARD_PREFIX_RE = /^#[A-Za-z0-9]+ /
+
 /** UTF-8 size of one code point. */
 function codePointBytes(code: number): number {
   if (code < 0x80) return 1
@@ -64,13 +67,27 @@ export function wantedSessionTitle(card: TitleCard): string {
 }
 
 /**
- * Whether the current title may be replaced at all: an untitled session, or a
- * title that already carries this card's prefix (the rename-refresh case).
- * A human title or another card's prefix stays untouched.
+ * Whether the current title may be replaced.
+ *
+ * Titles are three different things and only one of them is sacred:
+ *
+ *  - **empty** → ours to take;
+ *  - **`#ZGT4 …` of this card** → ours to refresh (a card rename follows);
+ *  - **`#ABCD …` of another card** → leave it: one session works one card, and
+ *    swapping the prefix would mislabel the history;
+ *  - **anything else** → only a HUMAN title is sacred. `sessionTitle.rename`
+ *    marks the titles we write with `source.kind = 'user'` too, so a title the
+ *    model/fallback generated (`fallback` / `provider`) may be replaced — that
+ *    is the normal case: by the time a tool runs, the first prompt has already
+ *    been titled.
+ *
  * @param current - latest title text, `null` when the session has none.
  * @param prefix - this card's `#XXXX ` prefix.
+ * @param source - `source.kind` of the latest title (`user` / `fallback` / `provider`).
  */
-export function shouldWriteTitle(current: string | null, prefix: string): boolean {
+export function shouldWriteTitle(current: string | null, prefix: string, source?: string): boolean {
   if (current === null || current === '') return true
-  return current.startsWith(prefix)
+  if (current.startsWith(prefix)) return true
+  if (CARD_PREFIX_RE.test(current)) return false
+  return source !== 'user'
 }

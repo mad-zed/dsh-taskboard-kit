@@ -34,7 +34,7 @@ async function check(name, fn) {
  * A host stand-in: one live session, a mutable title, and the writes it saw.
  * `titles: false` models a host that does not ship the session-title service.
  */
-function harness(initialTitle, { titles = true } = {}) {
+function harness(initialTitle, { titles = true, source = 'user' } = {}) {
   const state = { title: initialTitle }
   const writes = []
   const session = { id: 's1' }
@@ -43,7 +43,7 @@ function harness(initialTitle, { titles = true } = {}) {
     get: (name) => {
       if (name !== 'sessionTitle' || !titles) return undefined
       return {
-        get: () => (state.title === null ? undefined : { title: state.title }),
+        get: () => (state.title === null ? undefined : { title: state.title, source: { kind: source } }),
         rename: (_session, next) => {
           writes.push(next)
           state.title = next
@@ -96,12 +96,25 @@ await check('a human title (no # prefix) is never overwritten', () => {
   assert.deepEqual(h.writes, [])
 })
 
+await check('a generated title may be replaced', () => {
+  const h = harness('自动生成的标题', { source: 'fallback' })
+  const written = syncSessionTitle(h.ctx, h.exec, CARD)
+  assert.equal(written, '#ZGT4 一条龙失败排查')
+})
+
+await check('a provider title may be replaced too', () => {
+  const h = harness('自动生成的标题', { source: 'provider' })
+  assert.equal(syncSessionTitle(h.ctx, h.exec, CARD), '#ZGT4 一条龙失败排查')
+})
+
 await check('shouldWriteTitle: empty or own prefix only', () => {
   assert.equal(shouldWriteTitle(null, '#ZGT4 '), true)
   assert.equal(shouldWriteTitle('', '#ZGT4 '), true)
-  assert.equal(shouldWriteTitle('#ZGT4 x', '#ZGT4 '), true)
-  assert.equal(shouldWriteTitle('#ZGT45 x', '#ZGT4 '), false, 'no prefix-by-accident')
-  assert.equal(shouldWriteTitle('手写标题', '#ZGT4 '), false)
+  assert.equal(shouldWriteTitle('#ZGT4 x', '#ZGT4 ', 'user'), true)
+  assert.equal(shouldWriteTitle('#ZGT45 x', '#ZGT4 ', 'user'), false, 'no prefix-by-accident')
+  assert.equal(shouldWriteTitle('手写标题', '#ZGT4 ', 'user'), false)
+  assert.equal(shouldWriteTitle('自动标题', '#ZGT4 ', 'fallback'), true)
+  assert.equal(shouldWriteTitle('自动标题', '#ZGT4 ', 'provider'), true)
 })
 
 await check('long titles stay inside the byte budget, code points intact', () => {
