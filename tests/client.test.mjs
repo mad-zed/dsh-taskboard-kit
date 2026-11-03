@@ -102,11 +102,11 @@ await check('apply(): the「看板」conversation view tab is registered', () =>
 
   assert.deepEqual(
     [...new Set(injections)].sort(),
-    ['conversation.composer.dock', 'conversation.view', 'shell.overlay', 'sidebar.session.row.hover'],
+    ['conversation.composer.dock', 'conversation.view', 'shell.overlay', 'sidebar.workspaces.session.menu.item'],
   )
-  // The session-row hover card links to the card the title names (`#ZGT4 …`).
-  const rowLink = registrations.find((row) => row.options.name === 'sidebar.session.row.hover')
-  assert.ok(rowLink, 'the row link is registered into the sidebar session row hover card')
+  // The session-row menu opens the card the title names (`#ZGT4 …`).
+  const rowLink = registrations.find((row) => row.options.name === 'sidebar.workspaces.session.menu.item')
+  assert.ok(rowLink, 'the row entry is registered into the sidebar session row menu')
   assert.equal(rowLink.options.id, 'taskboard-row-link')
   // The number in the title is the only source of the card id: parse or nothing.
   const { cardIdFromTitle } = client
