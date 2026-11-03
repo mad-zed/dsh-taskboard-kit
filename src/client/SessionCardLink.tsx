@@ -1,49 +1,33 @@
 /**
- * Session-row hover card: jump to the card the session title names.
+ * Session-row「⋯」menu entry: jump to the card the session title names.
  *
- * The host writes `#ZGT4 卡片标题` into the title when a session creates,
- * claims or starts a card, so the row already says which card it belongs to.
- * This entry turns that number into a link: click → the status-bar mini board
- * drawer opens on that card's detail (`store.requestMini`).
+ * The host writes `#ZGT4 卡片标题` into a session's title when that session
+ * creates, claims or starts a card, so the row title already says which card it
+ * belongs to. The row menu hands every entry the row's `displayTitle`, so the
+ * number is parsed right here — no session-list lookup, nothing to guess: a row
+ * without a card prefix simply gets no entry.
  *
- * The row seat only hands us the session id, so the card number is parsed from
- * the session list's title projection. No title, no entry — the link never
- * guesses.
+ * Clicking opens the status-bar mini board drawer on that card (`requestMini`).
  *
  * @module dsh-taskboard-kit/client-session-link
  */
 
-import { useSyncExternalStore } from 'react'
 import { L } from './locale.ts'
 import { getTaskboardStore, type TaskboardStore } from './store.ts'
 
-interface SessionRowLike {
-  byId?: Record<string, { projections?: { values?: { title?: unknown } } } | undefined>
-}
-
-interface ObservableLike<T> {
-  get?(): T
-  snapshot?: T
-  value?: T
-  subscribe?(listener: () => void): () => void
-}
-
-interface SessionsLike {
-  list?: ObservableLike<SessionRowLike>
-}
-
-/** Props handed by the slot: the injected store, the session list, the row id. */
-export interface SessionCardLinkProps {
+/** Props handed by the slot: the injected store plus the row's own props. */
+export interface SessionCardMenuItemProps {
   store?: TaskboardStore
-  sessions?: SessionsLike
-  /** The row's session (standard row-seat prop). */
-  sessionId?: string
+  /** Row title as the sidebar renders it (persisted title, or ''). */
+  displayTitle?: string
+  /** The row menu's open-state pair; the entry dismisses it before acting. */
+  useMenuOpenState?: () => readonly [open: boolean, setOpen: (open: boolean) => void]
 }
 
 /**
- * `#ZGT4 标题` → `T-ZGT4`. Anything that is not a card prefix (`#`, letters or
- * digits, then a space) stays unrecognised.
- * @param title - the session title projection value.
+ * `#ZGT4 标题` → `T-ZGT4`. A bare `#ZGT4` (no trailing space) is not a prefix,
+ * and a hand-written title stays unrecognised on purpose.
+ * @param title - the row's display title.
  */
 export function cardIdFromTitle(title: unknown): string | undefined {
   if (typeof title !== 'string') return undefined
@@ -51,46 +35,36 @@ export function cardIdFromTitle(title: unknown): string | undefined {
   return match ? `T-${match[1]}` : undefined
 }
 
-/** Read an observable's current value whichever shape the host exposes. */
-function snapshotOf<T>(source: ObservableLike<T> | undefined): T | undefined {
-  if (!source) return undefined
-  if (typeof source.get === 'function') {
-    try {
-      return source.get()
-    } catch {
-      return undefined
-    }
-  }
-  return source.snapshot ?? source.value
-}
-
-/** The hover-card link; renders nothing while the row carries no card number. */
-export function SessionCardLink(props: SessionCardLinkProps): JSX.Element | null {
+/** The「⋯」entry; renders nothing while the row title carries no card number. */
+export function SessionCardMenuItem(props: SessionCardMenuItemProps): JSX.Element | null {
   const store = props.store ?? getTaskboardStore()
-  const list = props.sessions?.list
-  const state = useSyncExternalStore(
-    (notify) => (typeof list?.subscribe === 'function' ? list.subscribe(notify) : () => {}),
-    () => snapshotOf(list),
-    () => snapshotOf(list),
-  )
-  const sessionId = props.sessionId
-  const cardId = sessionId ? cardIdFromTitle(state?.byId?.[sessionId]?.projections?.values?.title) : undefined
+  const cardId = cardIdFromTitle(props.displayTitle)
+  const useMenuOpenState = props.useMenuOpenState
   if (!cardId) return null
   return (
     <button
       type="button"
+      role="menuitem"
       style={{
         all: 'unset',
         cursor: 'pointer',
         display: 'block',
         width: '100%',
-        padding: '4px 2px',
+        padding: '6px 10px',
         color: 'var(--dsw-alias-label-primary)',
         font: 'var(--dsw-font-xxs-12)',
       }}
-      onClick={() => store.requestMini(cardId)}
+      onClick={() => {
+        // Dismiss the menu first: the drawer opens over the frame, and a stale
+        // open menu would swallow the next click.
+        if (typeof useMenuOpenState === 'function') {
+          const [, setOpen] = useMenuOpenState()
+          setOpen(false)
+        }
+        store.requestMini(cardId)
+      }}
     >
-      {L('打开任务 {id} →', 'Open task {id} →', { id: cardId })}
+      {L('在看板中打开 {id}', 'Open {id} on the board', { id: cardId })}
     </button>
   )
 }
