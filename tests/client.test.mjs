@@ -100,7 +100,20 @@ await check('apply(): the「看板」conversation view tab is registered', () =>
   }
   client.apply(ctx)
 
-  assert.deepEqual([...new Set(injections)].sort(), ['conversation.composer.dock', 'conversation.view', 'shell.overlay'])
+  assert.deepEqual(
+    [...new Set(injections)].sort(),
+    ['conversation.composer.dock', 'conversation.view', 'shell.overlay', 'sidebar.session.row.hover'],
+  )
+  // The session-row hover card links to the card the title names (`#ZGT4 …`).
+  const rowLink = registrations.find((row) => row.options.name === 'sidebar.session.row.hover')
+  assert.ok(rowLink, 'the row link is registered into the sidebar session row hover card')
+  assert.equal(rowLink.options.id, 'taskboard-row-link')
+  // The number in the title is the only source of the card id: parse or nothing.
+  const { cardIdFromTitle } = client
+  assert.equal(cardIdFromTitle('#ZGT4 一条龙失败排查'), 'T-ZGT4')
+  assert.equal(cardIdFromTitle('#ZGT4'), undefined, 'a bare number is not a prefix')
+  assert.equal(cardIdFromTitle('手写标题'), undefined)
+  assert.equal(cardIdFromTitle(null), undefined)
 
   // The「看板」view tab sits after 对话 | 轨迹 | 文件 | 消息 (order 40).
   const view = registrations.find((row) => row.options.name === 'conversation.view')
